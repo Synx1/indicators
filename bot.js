@@ -182,7 +182,7 @@ async function getDrift(series) {
     const streakDir = dir === 'yes' ? 'UP' : 'DOWN';
     
     if (driftHours.includes(etHour)) return streakDir;
-    else if (fadeHours.includes(etHour)) return streakDir === 'UP' ? 'DOWN' : 'UP';
+    // FADE DISABLED — was losing in trending markets
     return null;
   } catch (_) { return null; }
 }
@@ -283,23 +283,9 @@ async function scan() {
         }
       }
 
-      // MODE 3: FADE (RSI extremes)
-      if (!side) {
-        const rsi = calcRSI(candles, 14);
-        if (rsi > 85) { side = 'NO'; price = noAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
-        else if (rsi < 15) { side = 'YES'; price = yesAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
-      }
+      // MODE 3: FADE — DISABLED (loses in trending markets)
 
-      // DRIFT OVERRIDE: trust drift over engine
-      const driftDir = await getDrift(coin.series);
-      if (driftDir && side) {
-        const driftSide = driftDir === 'UP' ? 'YES' : 'NO';
-        if (driftSide !== side) {
-          side = driftSide;
-          price = side === 'YES' ? yesAsk : noAsk;
-          mode = 'DRIFT-OVERRIDE';
-        }
-      }
+      // DRIFT OVERRIDE: DISABLED — engine is more reliable than drift
 
       if (!side || !price) continue;
       if (price < 0.45 || price > 0.90) continue;
