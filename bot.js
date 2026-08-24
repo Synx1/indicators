@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * V5 — Time-Aware Drift/Fade + Engine + Indicators
- * Self-contained for Railway deployment (no external src/ dependencies)
+ * V6 — Momentum Continuation (DirectionalBot method)
  * 
- * Strategy (backed by 3,959-round 31-day analysis):
- * - DRIFT hours (3,5,11,17 ET): bet WITH 3+ round streak (56-60% continuation)
- * - FADE hours (6,7,12-16,19,20 ET): bet AGAINST 3+ streak (breaks 56-63%)
- * - ENGINE: Z-score model 70%+ confidence + 2/4 indicators agree
- * - FADE MODE: RSI extremes (<25 or >75) contrarian
- * - Drift overrides engine when they disagree
+ * NOT predicting. REACTING to moves already happening.
  * 
- * Entry: 15-90c | Cashout: 95c | No stop | 30 shares
+ * Method:
+ * 1. Wait for round to develop (price moves away from 50c)
+ * 2. Bet on continuation of the move
+ * 3. Scale in: small probe -> bigger if it works
+ * 4. Asymmetric risk: tiny losses, big wins
+ * 5. Multiple entries per round allowed
+ * 6. Cash out winners at 90c+ or ride to settlement
  */
 const axios = require('axios');
 const fs = require('fs');
@@ -18,18 +18,17 @@ const fs = require('fs');
 const KALSHI = 'https://api.elections.kalshi.com/trade-api/v2';
 const COINBASE = 'https://api.exchange.coinbase.com/products';
 const WEBHOOK = process.env.DISCORD_WEBHOOK || '';
-// PID lock to prevent duplicate processes
+
+// PID lock
 const LOCK_FILE = './bot.pid';
-const myPid = process.pid;
 try {
   const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'));
-  try { process.kill(oldPid, 0); console.log('Another instance running (pid '+oldPid+'), killing it'); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
+  try { process.kill(oldPid, 0); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
 } catch(_) {}
-fs.writeFileSync(LOCK_FILE, String(myPid));
+fs.writeFileSync(LOCK_FILE, String(process.pid));
 process.on('exit', () => { try { fs.unlinkSync(LOCK_FILE); } catch(_) {} });
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
-
 
 const COINS = [
   { sym: 'BTC', series: 'KXBTC15M', product: 'BTC-USD' },
@@ -41,7 +40,8 @@ const COINS = [
   { sym: 'BNB', series: 'KXBNB15M', product: 'BNB-USD' }
 ];
 
-const SHARES = 30, CASHOUT = 0.95, MAX_POS = 3;
+const MAX_RISK_PER_TRADE = 0.15; // max 15% of bankroll per entry
+const CASHOUT_TARGET = 0.90; // cash out at 90c (take profit fast)
 const STATE_FILE = './state.json';
 let state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString() };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
@@ -54,93 +54,7 @@ function log(m) {
 
 async function webhook(msg) {
   if (!WEBHOOK) return;
-  try {
-    await axios.post(WEBHOOK, { content: msg }, { timeout: 5000 });
-  } catch (_) {}
-}
-
-// ═══════════════════════════════════════════════════════════
-// INDICATORS (self-contained)
-// ═══════════════════════════════════════════════════════════
-
-function calcRSI(candles, period = 14) {
-  if (candles.length < period + 1) return 50;
-  let gains = 0, losses = 0;
-  for (let i = 0; i < period; i++) {
-    const diff = candles[i].close - candles[i + 1].close;
-    if (diff > 0) gains += diff; else losses -= diff;
-  }
-  const avgGain = gains / period, avgLoss = losses / period;
-  if (avgLoss === 0) return 100;
-  return 100 - (100 / (1 + avgGain / avgLoss));
-}
-
-function calcEMA(candles, period) {
-  const prices = candles.map(c => c.close).reverse();
-  const k = 2 / (period + 1);
-  let ema = prices[0];
-  for (let i = 1; i < Math.min(prices.length, period * 3); i++) {
-    ema = prices[i] * k + ema * (1 - k);
-  }
-  return ema;
-}
-
-function calcBollingerBands(candles, period = 20, mult = 2) {
-  if (candles.length < period) return null;
-  const closes = candles.slice(0, period).map(c => c.close);
-  const mean = closes.reduce((a, b) => a + b, 0) / period;
-  const variance = closes.reduce((s, c) => s + (c - mean) ** 2, 0) / period;
-  return { upper: mean + mult * Math.sqrt(variance), middle: mean, lower: mean - mult * Math.sqrt(variance) };
-}
-
-function calcVWAP(candles, periods = 20) {
-  let cumVP = 0, cumVol = 0;
-  for (let i = 0; i < Math.min(periods, candles.length); i++) {
-    const typical = (candles[i].high + candles[i].low + candles[i].close) / 3;
-    cumVP += typical * (candles[i].volume || 1);
-    cumVol += (candles[i].volume || 1);
-  }
-  return cumVol > 0 ? cumVP / cumVol : candles[0].close;
-}
-
-// ═══════════════════════════════════════════════════════════
-// Z-SCORE ENGINE (simplified from BETSSSSS)
-// ═══════════════════════════════════════════════════════════
-
-function realizedVol(candles, lookback) {
-  const returns = [];
-  for (let i = 0; i < Math.min(lookback, candles.length - 1); i++) {
-    if (candles[i + 1].close > 0) {
-      returns.push(Math.log(candles[i].close / candles[i + 1].close));
-    }
-  }
-  if (returns.length < 5) return 0.0006; // fallback
-  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
-  return Math.sqrt(variance);
-}
-
-function engineEvaluate(spot, strike, minutesLeft, candles) {
-  if (!spot || !strike || minutesLeft < 3) return { side: null, confidence: 0 };
-  
-  const vol = realizedVol(candles, 10);
-  const gap = (spot - strike) / strike;
-  const sigma = vol * Math.sqrt(minutesLeft);
-  
-  if (sigma < 0.0001) return { side: null, confidence: 0 };
-  
-  const z = gap / sigma;
-  
-  // Standard normal CDF approximation
-  const t = 1 / (1 + 0.2316419 * Math.abs(z));
-  const d = 0.3989422804 * Math.exp(-z * z / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  const pYes = z >= 0 ? (1 - p) : p;
-  
-  const confidence = Math.round(Math.max(pYes, 1 - pYes) * 100);
-  const side = pYes >= 0.5 ? 'YES' : 'NO';
-  
-  return { side, confidence, pYes: Math.round(pYes * 100), z: z.toFixed(3) };
+  try { await axios.post(WEBHOOK, { content: msg }, { timeout: 5000 }); } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -149,49 +63,105 @@ function engineEvaluate(spot, strike, minutesLeft, candles) {
 
 async function getCandles(product) {
   const { data } = await axios.get(`${COINBASE}/${product}/candles`, { params: { granularity: 60 }, timeout: 10000 });
-  return (data || []).slice(0, 60).map(c => ({ time: c[0], low: c[1], high: c[2], open: c[3], close: c[4], volume: c[5] }));
+  return (data || []).slice(0, 15).map(c => ({ time: c[0], low: c[1], high: c[2], open: c[3], close: c[4], volume: c[5] }));
 }
 
-async function findActive(series) {
+async function getActiveMarkets(series) {
   try {
-    const { data } = await axios.get(`${KALSHI}/markets?series_ticker=${series}&limit=100`, { timeout: 15000 });
+    const { data } = await axios.get(`${KALSHI}/markets?series_ticker=${series}&limit=10`, { timeout: 15000 });
     const now = Date.now();
-    return (data.markets || []).find(m => m.status === 'active' && (new Date(m.close_time) - now) / 60000 > 3 && (new Date(m.close_time) - now) / 60000 < 14) || null;
-  } catch (_) { return null; }
+    // Get markets with 3-12 minutes left (let the round develop, don't enter too late)
+    return (data.markets || []).filter(m => {
+      if (m.status !== 'active') return false;
+      const minLeft = (new Date(m.close_time) - now) / 60000;
+      return minLeft > 3 && minLeft < 12;
+    });
+  } catch (_) { return []; }
 }
 
 // ═══════════════════════════════════════════════════════════
-// DRIFT/FADE with TIME FILTER
+// MOMENTUM DETECTION
 // ═══════════════════════════════════════════════════════════
 
-async function getDrift(series) {
-  try {
-    const etHour = (new Date().getUTCHours() - 4 + 24) % 24;
-    const driftHours = [3, 5, 11, 17];
-    const fadeHours = [6, 7, 12, 13, 14, 15, 16, 19, 20];
-    
-    const { data } = await axios.get(KALSHI + '/markets?series_ticker=' + series + '&limit=20', { timeout: 15000 });
-    const settled = (data.markets || []).filter(m => m.status === 'finalized' && m.result).slice(0, 5);
-    if (settled.length < 3) return null;
-    
-    const dir = settled[0].result;
-    let streak = 0;
-    for (const m of settled) { if (m.result === dir) streak++; else break; }
-    if (streak < 3) return null;
-    
-    const streakDir = dir === 'yes' ? 'UP' : 'DOWN';
-    
-    if (driftHours.includes(etHour)) return streakDir;
-    // FADE DISABLED — was losing in trending markets
-    return null;
-  } catch (_) { return null; }
+function detectMomentum(candles, market) {
+  if (!candles || candles.length < 5) return null;
+  
+  const spot = candles[0].close;
+  const strike = parseFloat(market.floor_strike || 0);
+  if (!strike) return null;
+  
+  const yesAsk = parseFloat(market.yes_ask_dollars || 0);
+  const noAsk = parseFloat(market.no_ask_dollars || 0);
+  
+  // How far has price moved from strike?
+  const gapPct = (spot - strike) / strike * 100;
+  
+  // Price momentum over last 5 candles
+  const momentum = (candles[0].close - candles[4].close) / candles[4].close * 100;
+  
+  // Volume acceleration
+  const recentVol = candles.slice(0, 3).reduce((a, c) => a + (c.volume || 0), 0) / 3;
+  const olderVol = candles.slice(3, 6).reduce((a, c) => a + (c.volume || 0), 0) / 3;
+  const volSpike = olderVol > 0 ? recentVol / olderVol : 1;
+  
+  // SIGNAL: Price is moving away from strike with momentum
+  let signal = null;
+  let confidence = 0; // 0-100, determines sizing
+  
+  // UP signal: price above strike AND still climbing
+  if (gapPct > 0.02 && momentum > 0.01) {
+    signal = 'UP';
+    confidence = Math.min(100, Math.round(gapPct * 20 + momentum * 50));
+    // Bonus for volume confirmation
+    if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
+  }
+  // DOWN signal: price below strike AND still falling  
+  else if (gapPct < -0.02 && momentum < -0.01) {
+    signal = 'DOWN';
+    confidence = Math.min(100, Math.round(Math.abs(gapPct) * 20 + Math.abs(momentum) * 50));
+    if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
+  }
+  
+  if (!signal) return null;
+  
+  // Entry price — we want cheap entries (the move is already showing)
+  const price = signal === 'UP' ? yesAsk : noAsk;
+  
+  // Only enter at cheap prices (15-70c) — the whole edge is asymmetric risk
+  if (price < 0.15 || price > 0.70) return null;
+  
+  return { signal, confidence, price, side: signal === 'UP' ? 'YES' : 'NO', gapPct, momentum, volSpike };
+}
+
+// ═══════════════════════════════════════════════════════════
+// POSITION SIZING (competitor method: scale with conviction)
+// ═══════════════════════════════════════════════════════════
+
+function getShares(confidence, price, bankroll) {
+  // Low confidence (30-50): 10 shares (probe)
+  // Medium (50-70): 30 shares
+  // High (70-90): 60 shares  
+  // Very high (90+): 100 shares
+  let shares;
+  if (confidence >= 90) shares = 100;
+  else if (confidence >= 70) shares = 60;
+  else if (confidence >= 50) shares = 30;
+  else shares = 10;
+  
+  // But never risk more than 15% of bankroll
+  const maxCost = bankroll * MAX_RISK_PER_TRADE;
+  const maxShares = Math.floor(maxCost / price);
+  shares = Math.min(shares, maxShares);
+  
+  // Minimum 5 shares
+  return Math.max(5, shares);
 }
 
 // ═══════════════════════════════════════════════════════════
 // TRADING LOGIC
 // ═══════════════════════════════════════════════════════════
 
-async function checkCashouts() {
+async function checkExits() {
   for (let i = state.open.length - 1; i >= 0; i--) {
     const pos = state.open[i];
     try {
@@ -199,7 +169,8 @@ async function checkCashouts() {
       const m = data.market;
       const sell = pos.side === 'YES' ? parseFloat(m.yes_bid_dollars || 0) : parseFloat(m.no_bid_dollars || 0);
 
-      if (sell >= CASHOUT && m.status === 'active') {
+      // Cash out at 90c+ (take profit fast like competitor)
+      if (sell >= CASHOUT_TARGET && m.status === 'active') {
         const pnl = (sell - pos.price) * pos.shares;
         state.bankroll += pos.shares * sell;
         pos.result = 'CASHOUT'; pos.exitPrice = sell; pos.pnl = pnl; pos.settledAt = new Date().toISOString();
@@ -208,10 +179,13 @@ async function checkCashouts() {
         webhook(`💰 **CASHOUT** ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c → ${Math.round(sell*100)}c | +$${pnl.toFixed(2)} | Bank: $${state.bankroll.toFixed(2)}`);
         save(); continue;
       }
+      
+      // Settlement
       if (m.status === 'finalized' || m.result) {
         const won = (pos.side === 'YES' && m.result === 'yes') || (pos.side === 'NO' && m.result === 'no');
         state.bankroll += won ? pos.shares : 0;
-        pos.result = won ? 'WIN' : 'LOSS'; pos.pnl = won ? pos.shares * (1 - pos.price) : -pos.cost;
+        pos.result = won ? 'WIN' : 'LOSS';
+        pos.pnl = won ? pos.shares * (1 - pos.price) : -(pos.shares * pos.price);
         pos.settledAt = new Date().toISOString();
         state.trades.push(pos); state.open.splice(i, 1);
         const emoji = won ? '✅' : '❌';
@@ -225,115 +199,79 @@ async function checkCashouts() {
 }
 
 async function scan() {
-  if (state.open.length >= MAX_POS) return;
+  // Allow up to 5 open positions (multiple per coin allowed)
+  if (state.open.length >= 5) return;
 
   for (const coin of COINS) {
-    if (state.open.length >= MAX_POS) break;
-    if (state.open.find(p => p.sym === coin.sym)) continue;
+    if (state.open.length >= 5) break;
+    
+    // Allow max 2 positions per coin (ladder in)
+    const coinPositions = state.open.filter(p => p.sym === coin.sym);
+    if (coinPositions.length >= 2) continue;
 
     try {
-      const market = await findActive(coin.series);
-      if (!market) continue;
-
+      const markets = await getActiveMarkets(coin.series);
+      if (!markets.length) continue;
+      
+      const market = markets[0];
       const candles = await getCandles(coin.product);
-      if (candles.length < 15) continue;
+      if (!candles || candles.length < 5) continue;
 
-      const spot = candles[0].close;
-      const minLeft = (new Date(market.close_time) - Date.now()) / 60000;
-      const yesAsk = parseFloat(market.yes_ask_dollars || 0);
-      const noAsk = parseFloat(market.no_ask_dollars || 0);
-      const strike = parseFloat(market.floor_strike || 0);
-
-      let side = null, price = null, mode = '';
-
-      // MODE 1: ENGINE + INDICATORS
-      const result = engineEvaluate(spot, strike, minLeft, candles);
-      if (result.confidence >= 85 && result.side) {
-        const rsi = calcRSI(candles, 14);
-        const ema9 = calcEMA(candles, 9);
-        const ema20 = calcEMA(candles, 20);
-        const bb = calcBollingerBands(candles, 20);
-        const vwap = calcVWAP(candles, 20);
-        let confirm = 0;
-        if (result.side === 'YES') {
-          if (rsi > 50) confirm++;
-          if (ema9 > ema20) confirm++;
-          if (bb && spot > bb.middle) confirm++;
-          if (spot > vwap) confirm++;
-        } else {
-          if (rsi < 50) confirm++;
-          if (ema9 < ema20) confirm++;
-          if (bb && spot < bb.middle) confirm++;
-          if (spot < vwap) confirm++;
-        }
-        if (confirm >= 2) {
-          side = result.side;
-          price = side === 'YES' ? yesAsk : noAsk;
-          mode = `ENGINE ${result.confidence}% z=${result.z}`;
-        }
+      const signal = detectMomentum(candles, market);
+      if (!signal) continue;
+      
+      // Only enter if confidence is at least 40
+      if (signal.confidence < 40) continue;
+      
+      // If we already have a position in this direction on this coin, 
+      // only add if confidence is HIGH (scaling in)
+      if (coinPositions.length > 0) {
+        const sameDir = coinPositions.find(p => p.direction === (signal.signal === 'UP' ? 'UP' : 'DOWN'));
+        if (sameDir && signal.confidence < 70) continue; // need high confidence to add
       }
 
-      // MODE 2: DRIFT (time-aware)
-      if (!side) {
-        const drift = await getDrift(coin.series);
-        if (drift) {
-          side = drift === 'UP' ? 'YES' : 'NO';
-          price = side === 'YES' ? yesAsk : noAsk;
-          mode = 'DRIFT';
-        }
-      }
+      const shares = getShares(signal.confidence, signal.price, state.bankroll);
+      const cost = shares * signal.price;
+      
+      if (cost > state.bankroll * 0.3) continue; // never more than 30% in one trade
+      if (cost < 1) continue;
 
-      // MODE 3: FADE — DISABLED (loses in trending markets)
-
-      // DRIFT OVERRIDE: DISABLED — engine is more reliable than drift
-
-      if (!side || !price) continue;
-      if (price < 0.45 || price > 0.90) continue;
-
-      const cost = SHARES * price;
-      if (cost > state.bankroll * 0.5) continue;
-
-
-      // Classify entry type (like competitor)
-      const recentCandles = candles.slice(0, 5);
-      const avgClose = recentCandles.reduce((a,c) => a + c.close, 0) / recentCandles.length;
-      let entryType = '';
-      if (side === 'YES') {
-        // Buying UP — is price below recent avg? (dip) or above? (chasing momentum)
-        entryType = spot < avgClose ? '📉 bought the dip' : '🚀 chased a move';
-      } else {
-        // Buying DOWN — is price above recent avg? (dip from high) or below? (chasing dump)
-        entryType = spot > avgClose ? '📉 bought the dip' : '🚀 chased a move';
-      }
       // ENTER
       state.bankroll -= cost;
-      const direction = side === 'YES' ? 'UP' : 'DOWN';
-      const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost, mode, entryType, enteredAt: new Date().toISOString() };
+      const direction = signal.signal;
+      const entryType = signal.momentum > 0.03 || signal.momentum < -0.03 ? '🚀 chased a move' : '📉 bought the dip';
+      const pos = {
+        ticker: market.ticker, sym: coin.sym, side: signal.side,
+        direction, price: signal.price, shares, cost,
+        confidence: signal.confidence, entryType,
+        gapPct: signal.gapPct.toFixed(3), momentum: signal.momentum.toFixed(4),
+        enteredAt: new Date().toISOString()
+      };
       state.open.push(pos);
       save();
-      log(`🎯 ${mode} ${coin.sym} ${direction} @${Math.round(price*100)}c | ${entryType} | ${SHARES}sh=${cost.toFixed(2)}`);
-      webhook(`🎯 **ENTRY** [${mode}] ${coin.sym} ${direction} @${Math.round(price*100)}c | ${entryType} | ${SHARES}sh = ${cost.toFixed(2)} | Bank: ${state.bankroll.toFixed(2)}`);
+      log(`🎯 ${coin.sym} ${direction} @${Math.round(signal.price*100)}c | ${entryType} | ${shares}sh conf:${signal.confidence} gap:${signal.gapPct.toFixed(2)}%`);
+      webhook(`🎯 **ENTRY** ${coin.sym} ${direction} @${Math.round(signal.price*100)}c | ${entryType} | ${shares}sh (conf:${signal.confidence}) | Bank: $${state.bankroll.toFixed(2)}`);
     } catch (_) {}
     await new Promise(r => setTimeout(r, 300));
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-// MAIN LOOP
+// MAIN
 // ═══════════════════════════════════════════════════════════
 
 async function main() {
-  log('=== V5 INDICATORS BOT — Railway Deploy ===');
-  log(`Strategy: Engine+Indicators | Drift(3,5,11,17 ET) | Fade(6,7,12-16,19,20 ET)`);
-  log(`Bankroll: $${state.bankroll.toFixed(2)} | Shares: ${SHARES} | Cashout: ${Math.round(CASHOUT*100)}c | Max pos: ${MAX_POS}`);
+  log('=== V6 MOMENTUM CONTINUATION BOT ===');
+  log('Method: React to moves, scale in, asymmetric risk');
+  log(`Bankroll: $${state.bankroll.toFixed(2)} | Entry: 15-70c | Cashout: 90c+ | Max 5 open`);
   log(`Trades: ${state.trades.length} | Open: ${state.open.length}`);
   log('');
   
-  webhook(`🚀 **V5 INDICATORS BOT STARTED**\nStrategy: Engine+Indicators | Time-Drift | Fade\nBankroll: $${state.bankroll.toFixed(2)} | ${state.trades.length} historical trades`);
+  webhook(`🚀 **V6 MOMENTUM BOT STARTED**\nMethod: React to moves already happening, scale in winners\nEntry: 15-70c | Cashout: 90c+ | Variable sizing 5-100sh\nBankroll: $${state.bankroll.toFixed(2)}`);
 
   while (true) {
-    try { await checkCashouts(); await scan(); } catch (e) { log('Err: ' + e.message); }
-    await new Promise(r => setTimeout(r, 15000));
+    try { await checkExits(); await scan(); } catch (e) { log('Err: ' + e.message); }
+    await new Promise(r => setTimeout(r, 10000)); // scan every 10s (faster than before)
   }
 }
 
