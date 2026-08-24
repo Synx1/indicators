@@ -248,7 +248,7 @@ async function scan() {
 
       // MODE 1: ENGINE + INDICATORS
       const result = engineEvaluate(spot, strike, minLeft, candles);
-      if (result.confidence >= 80 && result.side) {
+      if (result.confidence >= 85 && result.side) {
         const rsi = calcRSI(candles, 14);
         const ema9 = calcEMA(candles, 9);
         const ema20 = calcEMA(candles, 20);
@@ -319,9 +319,6 @@ async function scan() {
         // Buying DOWN — is price above recent avg? (dip from high) or below? (chasing dump)
         entryType = spot > avgClose ? '📉 bought the dip' : '🚀 chased a move';
       }
-      // ONLY enter dips — no chasing
-      if (entryType.includes("chased")) continue;
-
       // ENTER
       state.bankroll -= cost;
       const direction = side === 'YES' ? 'UP' : 'DOWN';
