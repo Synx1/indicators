@@ -319,6 +319,9 @@ async function scan() {
         // Buying DOWN — is price above recent avg? (dip from high) or below? (chasing dump)
         entryType = spot > avgClose ? '📉 bought the dip' : '🚀 chased a move';
       }
+      // ONLY enter dips — no chasing
+      if (entryType.includes("chased")) continue;
+
       // ENTER
       state.bankroll -= cost;
       const direction = side === 'YES' ? 'UP' : 'DOWN';
