@@ -1,7 +1,7 @@
 {
-  "name": "indicators",
-  "version": "1.0.0",
-  "description": "Kalshi 15-min crypto paper trader with regime-adaptive indicators",
+  "name": "indicators-bot",
+  "version": "5.0.0",
+  "description": "V5 Time-Aware Drift/Fade Kalshi paper trader",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
