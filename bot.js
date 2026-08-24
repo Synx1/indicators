@@ -18,6 +18,18 @@ const fs = require('fs');
 const KALSHI = 'https://api.elections.kalshi.com/trade-api/v2';
 const COINBASE = 'https://api.exchange.coinbase.com/products';
 const WEBHOOK = process.env.DISCORD_WEBHOOK || '';
+// PID lock to prevent duplicate processes
+const LOCK_FILE = './bot.pid';
+const myPid = process.pid;
+try {
+  const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'));
+  try { process.kill(oldPid, 0); console.log('Another instance running (pid '+oldPid+'), killing it'); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
+} catch(_) {}
+fs.writeFileSync(LOCK_FILE, String(myPid));
+process.on('exit', () => { try { fs.unlinkSync(LOCK_FILE); } catch(_) {} });
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+
 
 const COINS = [
   { sym: 'BTC', series: 'KXBTC15M', product: 'BTC-USD' },
@@ -295,14 +307,26 @@ async function scan() {
       const cost = SHARES * price;
       if (cost > state.bankroll * 0.5) continue;
 
+
+      // Classify entry type (like competitor)
+      const recentCandles = candles.slice(0, 5);
+      const avgClose = recentCandles.reduce((a,c) => a + c.close, 0) / recentCandles.length;
+      let entryType = '';
+      if (side === 'YES') {
+        // Buying UP — is price below recent avg? (dip) or above? (chasing momentum)
+        entryType = spot < avgClose ? '📉 bought the dip' : '🚀 chased a move';
+      } else {
+        // Buying DOWN — is price above recent avg? (dip from high) or below? (chasing dump)
+        entryType = spot > avgClose ? '📉 bought the dip' : '🚀 chased a move';
+      }
       // ENTER
       state.bankroll -= cost;
       const direction = side === 'YES' ? 'UP' : 'DOWN';
-      const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost, mode, enteredAt: new Date().toISOString() };
+      const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost, mode, entryType, enteredAt: new Date().toISOString() };
       state.open.push(pos);
       save();
-      log(`🎯 ${mode} ${coin.sym} ${direction} @${Math.round(price*100)}c | ${SHARES}sh=$${cost.toFixed(2)}`);
-      webhook(`🎯 **ENTRY** [${mode}] ${coin.sym} ${direction} @${Math.round(price*100)}c | ${SHARES}sh = $${cost.toFixed(2)} | Bank: $${state.bankroll.toFixed(2)}`);
+      log(`🎯 ${mode} ${coin.sym} ${direction} @${Math.round(price*100)}c | ${entryType} | ${SHARES}sh=${cost.toFixed(2)}`);
+      webhook(`🎯 **ENTRY** [${mode}] ${coin.sym} ${direction} @${Math.round(price*100)}c | ${entryType} | ${SHARES}sh = ${cost.toFixed(2)} | Bank: ${state.bankroll.toFixed(2)}`);
     } catch (_) {}
     await new Promise(r => setTimeout(r, 300));
   }
