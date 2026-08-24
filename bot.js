@@ -236,7 +236,7 @@ async function scan() {
 
       // MODE 1: ENGINE + INDICATORS
       const result = engineEvaluate(spot, strike, minLeft, candles);
-      if (result.confidence >= 70 && result.side) {
+      if (result.confidence >= 80 && result.side) {
         const rsi = calcRSI(candles, 14);
         const ema9 = calcEMA(candles, 9);
         const ema20 = calcEMA(candles, 20);
@@ -274,8 +274,8 @@ async function scan() {
       // MODE 3: FADE (RSI extremes)
       if (!side) {
         const rsi = calcRSI(candles, 14);
-        if (rsi > 75) { side = 'NO'; price = noAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
-        else if (rsi < 25) { side = 'YES'; price = yesAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
+        if (rsi > 85) { side = 'NO'; price = noAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
+        else if (rsi < 15) { side = 'YES'; price = yesAsk; mode = `FADE RSI:${Math.round(rsi)}`; }
       }
 
       // DRIFT OVERRIDE: trust drift over engine
@@ -290,7 +290,7 @@ async function scan() {
       }
 
       if (!side || !price) continue;
-      if (price < 0.15 || price > 0.90) continue;
+      if (price < 0.45 || price > 0.90) continue;
 
       const cost = SHARES * price;
       if (cost > state.bankroll * 0.5) continue;
