@@ -136,7 +136,14 @@ tr.red td:last-child{color:#ff5252}
   </div>
 </div>
 
-${bestHour ? `<div class="recommendation"><h2>🎯 Best Timeframe</h2><p><strong>${bestHour} ET</strong> — +$${bestPnl.toFixed(2)} PNL (${byHour[bestHour].w}W/${byHour[bestHour].l}L). Trade hardest during this window.</p></div>` : '<div class="recommendation"><h2>🎯 Best Timeframe</h2><p>Need more data (3+ trades per hour) to recommend. Keep running.</p></div>'}
+${bestHour ? `<div class="recommendation"><h2>🎯 Best Timeframe (from live data)</h2><p><strong>${bestHour} ET</strong> — +$${bestPnl.toFixed(2)} PNL (${byHour[bestHour].w}W/${byHour[bestHour].l}L). Trade hardest during this window.</p></div>` : '<div class="recommendation"><h2>🎯 Best Timeframe</h2><p>Need more data (3+ trades per hour) to recommend. Meanwhile, use the known windows below.</p></div>'}
+
+<div class="card" style="margin-bottom:24px"><h2>⏰ Known High-Volume Windows (31-day study)</h2>
+<div class="stat-row"><span>🌏 3–5 AM ET</span><span class="stat-label">Europe/Asia overlap · 1200-1800 BTC/hr</span></div>
+<div class="stat-row"><span>🇺🇸 9–10 AM ET</span><span class="stat-label">US open · 1500-1700 BTC/hr (best liquidity)</span></div>
+<div class="stat-row"><span>📈 11 AM–4 PM ET</span><span class="stat-label">US session · 700-1000 BTC/hr</span></div>
+<div class="stat-row red"><span>💤 7 PM–2 AM ET</span><span class="stat-label">Dead zone · avoid, thin volume</span></div>
+</div>
 
 ${s.open.length ? `<div class="card open"><h2>⏳ Open Positions (${s.open.length})</h2><table><tr><th>Coin</th><th>Dir</th><th>Entry</th><th>Shares</th><th>Conf</th><th>Type</th></tr>${s.open.map(o => `<tr><td>${o.sym}</td><td>${o.direction}</td><td>${Math.round(o.price*100)}c</td><td>${o.shares}</td><td>${o.confidence||'?'}</td><td>${o.entryType||''}</td></tr>`).join('')}</table></div>` : ''}
 
