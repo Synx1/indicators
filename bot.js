@@ -74,7 +74,7 @@ async function getActiveMarkets(series) {
     return (data.markets || []).filter(m => {
       if (m.status !== 'active') return false;
       const minLeft = (new Date(m.close_time) - now) / 60000;
-      return minLeft > 3 && minLeft < 12;
+      return minLeft > 2 && minLeft < 14;
     });
   } catch (_) { return []; }
 }
@@ -109,14 +109,14 @@ function detectMomentum(candles, market) {
   let confidence = 0; // 0-100, determines sizing
   
   // UP signal: price above strike AND still climbing
-  if (gapPct > 0.02 && momentum > 0.01) {
+  if (gapPct > 0.01 && momentum > 0.005) {
     signal = 'UP';
     confidence = Math.min(100, Math.round(gapPct * 20 + momentum * 50));
     // Bonus for volume confirmation
     if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
   }
   // DOWN signal: price below strike AND still falling  
-  else if (gapPct < -0.02 && momentum < -0.01) {
+  else if (gapPct < -0.01 && momentum < -0.005) {
     signal = 'DOWN';
     confidence = Math.min(100, Math.round(Math.abs(gapPct) * 20 + Math.abs(momentum) * 50));
     if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
@@ -271,7 +271,7 @@ async function main() {
 
   while (true) {
     try { await checkExits(); await scan(); } catch (e) { log('Err: ' + e.message); }
-    await new Promise(r => setTimeout(r, 10000)); // scan every 10s (faster than before)
+    await new Promise(r => setTimeout(r, 100)); // scan every 10s (faster than before)
   }
 }
 
