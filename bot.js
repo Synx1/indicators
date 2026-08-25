@@ -83,6 +83,26 @@ async function getActiveMarkets(series) {
 // MOMENTUM DETECTION
 // ═══════════════════════════════════════════════════════════
 
+
+function calcRSI(candles, period = 14) {
+  if (candles.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = 0; i < period; i++) {
+    const diff = candles[i].close - candles[i + 1].close;
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const avgGain = gains / period, avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  return 100 - (100 / (1 + avgGain / avgLoss));
+}
+function calcEMA(candles, period) {
+  const prices = candles.map(c => c.close).reverse();
+  const k = 2 / (period + 1);
+  let ema = prices[0];
+  for (let i = 1; i < Math.min(prices.length, period * 3); i++) ema = prices[i] * k + ema * (1 - k);
+  return ema;
+}
+
 function detectMomentum(candles, market) {
   if (!candles || candles.length < 5) return null;
   
@@ -131,7 +151,26 @@ function detectMomentum(candles, market) {
   // Only enter at cheap prices (15-70c) — the whole edge is asymmetric risk
   if (price < 0.15 || price > 0.70) return null;
   
-  return { signal, confidence, price, side: signal === 'UP' ? 'YES' : 'NO', gapPct, momentum, volSpike };
+  // ── INDICATOR CONFIRMATION (the fix — chasing blindly lost $40) ──
+  const rsi = calcRSI(candles, 14);
+  const ema9 = calcEMA(candles, 9);
+  const ema20 = calcEMA(candles, 20);
+  const entryType = (momentum > 0.02 || momentum < -0.02) ? 'chase' : 'dip';
+
+  if (signal === 'UP') {
+    // Never CHASE up into overbought — that is buying the top (what killed HYPE/DOGE)
+    if (entryType === 'chase' && rsi > 68) return null;
+    // Chase requires EMA trend agreement
+    if (entryType === 'chase' && ema9 < ema20) return null;
+  } else {
+    if (entryType === 'chase' && rsi < 32) return null;
+    if (entryType === 'chase' && ema9 > ema20) return null;
+  }
+  // Indicator alignment boosts confidence (bigger size when trend confirms)
+  if (signal === 'UP' && ema9 > ema20 && rsi > 50) confidence = Math.min(100, confidence + 15);
+  if (signal === 'DOWN' && ema9 < ema20 && rsi < 50) confidence = Math.min(100, confidence + 15);
+
+  return { signal, confidence, price, side: signal === 'UP' ? 'YES' : 'NO', gapPct, momentum, volSpike, rsi };
 }
 
 // ═══════════════════════════════════════════════════════════
