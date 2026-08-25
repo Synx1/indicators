@@ -68,7 +68,7 @@ async function getCandles(product) {
 
 async function getActiveMarkets(series) {
   try {
-    const { data } = await axios.get(`${KALSHI}/markets?series_ticker=${series}&limit=10`, { timeout: 15000 });
+    const { data } = await axios.get(`${KALSHI}/markets?series_ticker=${series}&status=open&limit=10`, { timeout: 15000 });
     const now = Date.now();
     // Get markets with 3-12 minutes left (let the round develop, don't enter too late)
     return (data.markets || []).filter(m => {
