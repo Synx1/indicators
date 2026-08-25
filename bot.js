@@ -104,22 +104,23 @@ function detectMomentum(candles, market) {
   const olderVol = candles.slice(3, 6).reduce((a, c) => a + (c.volume || 0), 0) / 3;
   const volSpike = olderVol > 0 ? recentVol / olderVol : 1;
   
-  // SIGNAL: Price is moving away from strike with momentum
+  // SIGNAL: React to the direction price is MOVING (momentum-driven, like competitor)
+  // Momentum is the primary driver — bet the way price is heading.
   let signal = null;
   let confidence = 0; // 0-100, determines sizing
-  
-  // UP signal: price above strike AND still climbing
-  if (gapPct > 0.01 && momentum > 0.005) {
+  const MOM_MIN = 0.003; // ~0.003% move over 5 candles is enough to show direction
+
+  if (momentum > MOM_MIN) {
     signal = 'UP';
-    confidence = Math.min(100, Math.round(gapPct * 20 + momentum * 50));
-    // Bonus for volume confirmation
-    if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
-  }
-  // DOWN signal: price below strike AND still falling  
-  else if (gapPct < -0.01 && momentum < -0.005) {
+    // Confidence from momentum strength + gap alignment (price already above strike is bonus)
+    confidence = Math.min(100, Math.round(momentum * 400 + Math.max(0, gapPct) * 30 + 40));
+    if (volSpike > 1.5) confidence = Math.min(100, confidence + 15);
+    if (gapPct > 0.01) confidence = Math.min(100, confidence + 10); // price + momentum agree
+  } else if (momentum < -MOM_MIN) {
     signal = 'DOWN';
-    confidence = Math.min(100, Math.round(Math.abs(gapPct) * 20 + Math.abs(momentum) * 50));
-    if (volSpike > 1.5) confidence = Math.min(100, confidence + 20);
+    confidence = Math.min(100, Math.round(Math.abs(momentum) * 400 + Math.max(0, -gapPct) * 30 + 40));
+    if (volSpike > 1.5) confidence = Math.min(100, confidence + 15);
+    if (gapPct < -0.01) confidence = Math.min(100, confidence + 10);
   }
   
   if (!signal) return null;
