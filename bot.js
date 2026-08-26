@@ -6,7 +6,7 @@
  * Reverting to what actually won: the Z-score model picks direction at high
  * confidence, indicators confirm, cheap entries, cashout at 95c.
  *
- * Entry: engine 85%+ conf + 2/4 indicators agree + price 25-90c
+ * Entry: engine 85%+ conf + 2/4 indicators agree + price 25-80c
  * Cashout: 97c | No stop | 30 shares | status=open market query (critical fix)
  * Fees: Kalshi ceil(0.07*C*P*(1-P)) modeled on entry + cashout so PnL is honest.
  * Sweeper: force-settles positions still open long after their market closed.
@@ -313,7 +313,14 @@ async function scan() {
       // opposite-direction bet in the same window is still allowed (it hedges).
       if (state.open.some(p => p.side === side && p.closeTime === market.close_time)) continue;
       const price = side === 'YES' ? yesAsk : noAsk;
-      if (price < 0.25 || price > 0.90) continue;
+      // Upper cap 0.80 (was 0.90): a binary bought at price p needs ~p win-rate
+      // just to break even, so 85-90c entries require ~85-90% and bleed on the
+      // ~10% that flip (XRP@86c / ETH@83c cost -$25 each on 2026-08-26). Replay
+      // over 837 settled markets: the 85-90c band is net -$72 and 80-85c only
+      // +$18, while 75-80c is +$458 (90% win). Capping at 0.80 sheds the losing
+      // and marginal bands, keeps the profitable core (+$650 vs +$596 baseline).
+      // Lower bound unchanged — cheap entries have the best risk/reward.
+      if (price < 0.25 || price > 0.80) continue;
 
       const cost = SHARES * price;
       if (cost > state.bankroll * 0.5) continue;
@@ -341,10 +348,10 @@ async function scan() {
 
 async function main() {
   log('=== V7 ENGINE + INDICATORS (proven 15W/1L config) ===');
-  log(`Engine ${MIN_CONF}%+ | 2/4 indicators | Entry 25-90c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
+  log(`Engine ${MIN_CONF}%+ | 2/4 indicators | Entry 25-80c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
   log(`Bankroll: $${state.bankroll.toFixed(2)} | Trades: ${state.trades.length} | Open: ${state.open.length}`);
   log('');
-  webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 25-90c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
+  webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 25-80c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
   while (true) {
     try { await checkCashouts(); await sweepStuck(); await scan(); } catch (e) { log('Err: ' + e.message); }
     await new Promise(r => setTimeout(r, 5000));
