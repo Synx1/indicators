@@ -37,7 +37,7 @@ const COINS = [
   { sym: 'BNB', series: 'KXBNB15M', product: 'BNB-USD' }
 ];
 
-const SHARES = 30, CASHOUT = 0.95, MAX_POS = 3, MIN_CONF = 85;
+const SHARES = 30, CASHOUT = 0.97, MAX_POS = 3, MIN_CONF = 85;
 const STATE_FILE = './state.json';
 let state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString() };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
@@ -209,7 +209,7 @@ async function scan() {
 
       const side = result.side;
       const price = side === 'YES' ? yesAsk : noAsk;
-      if (price < 0.45 || price > 0.90) continue;
+      if (price < 0.25 || price > 0.90) continue;
 
       const cost = SHARES * price;
       if (cost > state.bankroll * 0.5) continue;
@@ -235,10 +235,10 @@ async function scan() {
 
 async function main() {
   log('=== V7 ENGINE + INDICATORS (proven 15W/1L config) ===');
-  log(`Engine ${MIN_CONF}%+ | 2/4 indicators | Entry 45-90c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
+  log(`Engine ${MIN_CONF}%+ | 2/4 indicators | Entry 25-90c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
   log(`Bankroll: $${state.bankroll.toFixed(2)} | Trades: ${state.trades.length} | Open: ${state.open.length}`);
   log('');
-  webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 45-90c | cashout 95c\nBankroll: $${state.bankroll.toFixed(2)}`);
+  webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 25-90c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
   while (true) {
     try { await checkCashouts(); await scan(); } catch (e) { log('Err: ' + e.message); }
     await new Promise(r => setTimeout(r, 5000));
