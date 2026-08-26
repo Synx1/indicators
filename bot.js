@@ -58,6 +58,17 @@ const STATE_FILE = `${DATA_DIR}/state.json`;
 let state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString() };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
 
+// One-time bankroll reset. State persists on the /data volume, so a normal
+// redeploy reloads the old state.json above and does NOT reset the paper
+// bankroll. To force a clean $100 restart, bump RESET_TOKEN: on the next boot
+// the stored token won't match, so we wipe to a fresh $100 baseline exactly once
+// and record the new token — every later redeploy then keeps trading from there.
+const RESET_TOKEN = '2026-08-26-fresh-100';
+if (state.resetToken !== RESET_TOKEN) {
+  state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString(), resetToken: RESET_TOKEN };
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch (_) {}
+}
+
 function save() { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); }
 function log(m) {
   const t = new Date().toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/New_York' });
