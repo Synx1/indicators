@@ -305,6 +305,13 @@ async function scan() {
       if (confirm < 2) continue;
 
       const side = result.side;
+      // Correlation guard — 15-min crypto moves as one asset class, so multiple
+      // same-direction bets settling in the SAME window are a single leveraged
+      // position, not diversification. On 2026-08-26 the bot went DOGE/XRP/ETH
+      // all DOWN in the same 05:30 window and lost all three together ($100 ->
+      // $35.62). Cap to one position per direction per settlement window; an
+      // opposite-direction bet in the same window is still allowed (it hedges).
+      if (state.open.some(p => p.side === side && p.closeTime === market.close_time)) continue;
       const price = side === 'YES' ? yesAsk : noAsk;
       if (price < 0.25 || price > 0.90) continue;
 
