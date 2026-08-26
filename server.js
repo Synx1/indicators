@@ -1,6 +1,11 @@
 const http = require('http');
 const fs = require('fs');
-const STATE_FILE = './state.json';
+
+// Read state from the same place bot.js writes it — the Railway volume (/data)
+// when attached, else the local dir. This MUST match bot.js's resolution, or the
+// dashboard would read a stale/empty file while the bot writes to the volume.
+const DATA_DIR = process.env.STATE_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || (fs.existsSync('/data') ? '/data' : '.');
+const STATE_FILE = `${DATA_DIR}/state.json`;
 
 function getState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
@@ -178,7 +183,7 @@ ${s.open.length ? `<div class="card open"><h2>⏳ Open Positions (${s.open.lengt
 const server = http.createServer((req, res) => {
   if (req.url === '/api/state') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(fs.readFileSync(STATE_FILE, 'utf8'));
+    res.end(JSON.stringify(getState()));
   } else {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(buildPage());

@@ -44,7 +44,17 @@ const COINS = [
 ];
 
 const SHARES = 30, CASHOUT = 0.97, MAX_POS = 3, MIN_CONF = 85;
-const STATE_FILE = './state.json';
+
+// State lives on the Railway volume (mounted at /data) so the bankroll + trade
+// history survive redeploys. The container filesystem is wiped on every deploy,
+// which is exactly what kept resetting the paper bankroll to $100. Railway sets
+// RAILWAY_VOLUME_MOUNT_PATH automatically when a volume is attached; STATE_DIR
+// overrides it; and we fall back to the cwd locally (no volume — replay/smoke
+// tests). If the volume isn't attached yet the bot still runs, just not
+// persistently, so this is safe to ship before the volume exists.
+const DATA_DIR = process.env.STATE_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || (fs.existsSync('/data') ? '/data' : '.');
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
+const STATE_FILE = `${DATA_DIR}/state.json`;
 let state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString() };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
 
