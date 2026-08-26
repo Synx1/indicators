@@ -6,8 +6,10 @@
  * Reverting to what actually won: the Z-score model picks direction at high
  * confidence, indicators confirm, cheap entries, cashout at 95c.
  *
- * Entry: engine 85%+ conf + 2/4 indicators agree + price 45-90c
- * Cashout: 95c | No stop | 30 shares | status=open market query (critical fix)
+ * Entry: engine 85%+ conf + 2/4 indicators agree + price 25-90c
+ * Cashout: 97c | No stop | 30 shares | status=open market query (critical fix)
+ * Fees: Kalshi ceil(0.07*C*P*(1-P)) modeled on entry + cashout so PnL is honest.
+ * Sweeper: force-settles positions still open long after their market closed.
  */
 const axios = require('axios');
 const fs = require('fs');
@@ -16,16 +18,19 @@ const KALSHI = 'https://api.elections.kalshi.com/trade-api/v2';
 const COINBASE = 'https://api.exchange.coinbase.com/products';
 const WEBHOOK = process.env.DISCORD_WEBHOOK || '';
 
-// PID lock
-const LOCK_FILE = './bot.pid';
-try {
-  const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'));
-  try { process.kill(oldPid, 0); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
-} catch(_) {}
-fs.writeFileSync(LOCK_FILE, String(process.pid));
-process.on('exit', () => { try { fs.unlinkSync(LOCK_FILE); } catch(_) {} });
-process.on('SIGTERM', () => process.exit(0));
-process.on('SIGINT', () => process.exit(0));
+// PID lock — only when run as the live bot, never when required by the replay
+// harness (which imports the decision functions below and must not touch the
+// live bot's pidfile or send it a SIGTERM).
+if (require.main === module) {
+  try {
+    const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'));
+    try { process.kill(oldPid, 0); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
+  } catch(_) {}
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  process.on('exit', () => { try { fs.unlinkSync(LOCK_FILE); } catch(_) {} });
+  process.on('SIGTERM', () => process.exit(0));
+  process.on('SIGINT', () => process.exit(0));
+}
 
 const COINS = [
   { sym: 'BTC', series: 'KXBTC15M', product: 'BTC-USD' },
@@ -52,6 +57,20 @@ async function webhook(msg) {
   try { await axios.post(WEBHOOK, { content: msg }, { timeout: 5000 }); } catch (_) {}
 }
 
+// ── FEES + SWEEPER TIMING ──
+// Kalshi charges ceil(0.07 * contracts * price * (1-price)) rounded up to the
+// cent on every fill — entry and any cashout sell. Holding to settlement is not
+// a fill, so it has no exit fee. Modeled so reported PnL/bankroll match what
+// Kalshi actually takes instead of running ~$0.34/round-trip optimistic.
+function fee(price, shares) {
+  return Math.ceil(0.07 * shares * price * (1 - price) * 100) / 100;
+}
+// A 15-minute market finalizes within ~a minute of close_time. A position still
+// open well past that means its settlement fetch is failing; with MAX_POS such
+// positions the bot silently stops entering. These windows drive the sweeper.
+const SETTLE_GRACE_MS = 3 * 60 * 1000;    // past this, a held market must be graded
+const FORCE_GRACE_MS = 45 * 60 * 1000;    // ungradeable this long => unwedge (as loss)
+
 // ── INDICATORS ──
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
@@ -65,10 +84,20 @@ function calcRSI(candles, period = 14) {
   return 100 - (100 / (1 + avgGain / avgLoss));
 }
 function calcEMA(candles, period) {
-  const prices = candles.map(c => c.close).reverse();
+  // Candles arrive newest-first, so the EMA has to be walked oldest -> newest
+  // and must END on the latest bar.
+  //
+  // The previous version reversed the whole 60-candle array and then capped the
+  // loop at period*3 from the *start*, which walked the OLDEST bars and stopped
+  // early: ema9 finished ~33 minutes behind the market while ema20 (cap 60, so
+  // uncapped) finished at the present. The `ema9 > ema20` crossover was
+  // therefore comparing two different points in time, and one of the four
+  // indicator confirmations was reading history as if it were now.
+  const span = Math.min(candles.length, period * 3);
+  const prices = candles.slice(0, span).map(c => c.close).reverse();
   const k = 2 / (period + 1);
   let ema = prices[0];
-  for (let i = 1; i < Math.min(prices.length, period * 3); i++) ema = prices[i] * k + ema * (1 - k);
+  for (let i = 1; i < prices.length; i++) ema = prices[i] * k + ema * (1 - k);
   return ema;
 }
 function calcBollingerBands(candles, period = 20, mult = 2) {
@@ -140,9 +169,10 @@ async function checkCashouts() {
       const m = data.market;
       const sell = pos.side === 'YES' ? parseFloat(m.yes_bid_dollars || 0) : parseFloat(m.no_bid_dollars || 0);
       if (sell >= CASHOUT && m.status === 'active') {
-        const pnl = (sell - pos.price) * pos.shares;
-        state.bankroll += pos.shares * sell;
-        pos.result = 'CASHOUT'; pos.exitPrice = sell; pos.pnl = pnl; pos.settledAt = new Date().toISOString();
+        const eFee = pos.entryFee || 0, xFee = fee(sell, pos.shares);
+        const pnl = (sell - pos.price) * pos.shares - eFee - xFee;
+        state.bankroll += pos.shares * sell - xFee;
+        pos.result = 'CASHOUT'; pos.exitPrice = sell; pos.exitFee = xFee; pos.pnl = pnl; pos.settledAt = new Date().toISOString();
         state.trades.push(pos); state.open.splice(i, 1);
         log(`💰 CASHOUT ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c -> ${Math.round(sell*100)}c | +$${pnl.toFixed(2)}`);
         webhook(`💰 **CASHOUT** ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c → ${Math.round(sell*100)}c | +$${pnl.toFixed(2)} | Bank: $${state.bankroll.toFixed(2)}`);
@@ -150,9 +180,10 @@ async function checkCashouts() {
       }
       if (m.status === 'finalized' || m.result) {
         const won = (pos.side === 'YES' && m.result === 'yes') || (pos.side === 'NO' && m.result === 'no');
+        const eFee = pos.entryFee || 0;
         state.bankroll += won ? pos.shares : 0;
         pos.result = won ? 'WIN' : 'LOSS';
-        pos.pnl = won ? pos.shares * (1 - pos.price) : -(pos.shares * pos.price);
+        pos.pnl = (won ? pos.shares * (1 - pos.price) : -(pos.shares * pos.price)) - eFee;
         pos.settledAt = new Date().toISOString();
         state.trades.push(pos); state.open.splice(i, 1);
         const emoji = won ? '✅' : '❌';
@@ -161,6 +192,61 @@ async function checkCashouts() {
         save();
       }
     } catch (_) {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+
+// ── STUCK-POSITION SWEEPER ──
+// checkCashouts swallows every fetch error, so a position whose /markets/{ticker}
+// lookup keeps failing (transient network, or Kalshi delisting the ticker after
+// settlement) never leaves state.open. With MAX_POS = 3, three such positions
+// permanently block scan() from taking any new trade — the bot looks alive but
+// is wedged. This runs each cycle: any position still open past SETTLE_GRACE_MS
+// after its market closed is graded off the real settlement (direct fetch, then
+// the series settled list as a fallback). If it still can't be graded after
+// FORCE_GRACE_MS it's closed out as a loss and shouted about, so the bot can
+// never silently stop trading.
+async function sweepStuck() {
+  const now = Date.now();
+  for (let i = state.open.length - 1; i >= 0; i--) {
+    const pos = state.open[i];
+    const closeMs = pos.closeTime ? new Date(pos.closeTime).getTime() : 0;
+    if (!closeMs || now < closeMs + SETTLE_GRACE_MS) continue;   // not due to be settled yet
+
+    let result = null;                                           // 'yes' | 'no' once known
+    try {
+      const { data } = await axios.get(`${KALSHI}/markets/${pos.ticker}`, { timeout: 10000 });
+      if (data.market && data.market.result) result = data.market.result;
+    } catch (_) {}
+    if (!result) {                                               // ticker fetch failed — try the series list
+      try {
+        const series = pos.ticker.split('-')[0];
+        const { data } = await axios.get(`${KALSHI}/markets?series_ticker=${series}&status=settled&limit=200`, { timeout: 15000 });
+        const m = (data.markets || []).find(x => x.ticker === pos.ticker);
+        if (m && m.result) result = m.result;
+      } catch (_) {}
+    }
+
+    const eFee = pos.entryFee || 0;
+    if (result === 'yes' || result === 'no') {
+      const won = (pos.side === 'YES' && result === 'yes') || (pos.side === 'NO' && result === 'no');
+      state.bankroll += won ? pos.shares : 0;
+      pos.result = won ? 'WIN' : 'LOSS'; pos.recovered = true;
+      pos.pnl = (won ? pos.shares * (1 - pos.price) : -(pos.shares * pos.price)) - eFee;
+      pos.settledAt = new Date().toISOString();
+      state.trades.push(pos); state.open.splice(i, 1); save();
+      const emoji = won ? '✅' : '❌';
+      log(`${emoji} ${pos.result} (recovered) ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c | $${pos.pnl.toFixed(2)}`);
+      webhook(`${emoji} **${pos.result}** (recovered) ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c | $${pos.pnl.toFixed(2)} | Bank: $${state.bankroll.toFixed(2)}`);
+    } else if (now > closeMs + FORCE_GRACE_MS) {                 // ungradeable far past close — unwedge
+      const mins = Math.round((now - closeMs) / 60000);
+      pos.result = 'UNRESOLVED'; pos.forcedClose = true;
+      pos.pnl = -(pos.shares * pos.price) - eFee;                // cost already spent; assume the worst
+      pos.settledAt = new Date().toISOString();
+      state.trades.push(pos); state.open.splice(i, 1); save();
+      log(`⚠️ UNRESOLVED force-closed ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c ${mins}m after close | $${pos.pnl.toFixed(2)}`);
+      webhook(`⚠️ **UNRESOLVED** force-closed ${pos.sym} ${pos.direction} @${Math.round(pos.price*100)}c (couldn't grade ${mins}m after close) | Bank: $${state.bankroll.toFixed(2)}`);
+    }
     await new Promise(r => setTimeout(r, 200));
   }
 }
@@ -213,6 +299,7 @@ async function scan() {
 
       const cost = SHARES * price;
       if (cost > state.bankroll * 0.5) continue;
+      const entryFee = fee(price, SHARES);
 
       // Entry type label
       const avgClose = candles.slice(0, 5).reduce((a, c) => a + c.close, 0) / 5;
@@ -220,13 +307,14 @@ async function scan() {
         ? (spot < avgClose ? '📉 bought the dip' : '🚀 chased a move')
         : (spot > avgClose ? '📉 bought the dip' : '🚀 chased a move');
 
-      state.bankroll -= cost;
+      state.bankroll -= (cost + entryFee);
       const direction = side === 'YES' ? 'UP' : 'DOWN';
-      const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost,
+      const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost, entryFee,
+        closeTime: market.close_time, strike,
         confidence: result.confidence, z: result.z, rsi: Math.round(rsi), confirm, entryType, enteredAt: new Date().toISOString() };
       state.open.push(pos);
       save();
-      log(`🎯 ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% z=${result.z} ${confirm}/4 | ${entryType}`);
+      log(`🎯 ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% z=${result.z} ${confirm}/4 | fee $${entryFee.toFixed(2)} | ${entryType}`);
       webhook(`🎯 **ENTRY** ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% (${confirm}/4 ind) | ${entryType} | Bank: $${state.bankroll.toFixed(2)}`);
     } catch (_) {}
     await new Promise(r => setTimeout(r, 300));
@@ -240,8 +328,19 @@ async function main() {
   log('');
   webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 25-90c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
   while (true) {
-    try { await checkCashouts(); await scan(); } catch (e) { log('Err: ' + e.message); }
+    try { await checkCashouts(); await sweepStuck(); await scan(); } catch (e) { log('Err: ' + e.message); }
     await new Promise(r => setTimeout(r, 5000));
   }
 }
-main().catch(e => { log('Fatal: ' + e.message); process.exit(1); });
+// Only run the trading loop when invoked directly. When required (by replay.js)
+// this file is just a library of the exact decision functions the live bot uses,
+// so the backtest cannot drift from production.
+if (require.main === module) {
+  main().catch(e => { log('Fatal: ' + e.message); process.exit(1); });
+}
+
+module.exports = {
+  engineEvaluate, realizedVol,
+  calcRSI, calcEMA, calcBollingerBands, calcVWAP,
+  COINS, SHARES, CASHOUT, MAX_POS, MIN_CONF
+};
