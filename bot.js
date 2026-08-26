@@ -22,6 +22,7 @@ const WEBHOOK = process.env.DISCORD_WEBHOOK || '';
 // harness (which imports the decision functions below and must not touch the
 // live bot's pidfile or send it a SIGTERM).
 if (require.main === module) {
+  const LOCK_FILE = './bot.pid';
   try {
     const oldPid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'));
     try { process.kill(oldPid, 0); process.kill(oldPid, 'SIGTERM'); } catch(_) {}
