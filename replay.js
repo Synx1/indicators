@@ -116,7 +116,7 @@ function decideEntry(row, byTime) {
       if (bb && spot < bb.middle) confirm++;
       if (spot < vwap) confirm++;
     }
-    if (confirm < 2) continue;
+    if (confirm < bot.MIN_CONFIRM) continue;
 
     // Fill: YES pays yes_ask (=q.ask); NO pays no_ask (=1 - yes_bid).
     const entryPrice = res.side === 'YES' ? q.ask : (1 - q.bid);
@@ -205,8 +205,11 @@ function main() {
   console.log(`  markets scanned: ${pool}   entries taken: ${entered.length} ` +
     `(${pct(entered.length / pool)} of pool)`);
   console.log('  ' + '─'.repeat(74));
-  console.log('  entry gate reproduced from bot.js: engine >=85% + 2/4 indicators + 25-90c band');
+  console.log('  entry gate reproduced from bot.js: engine >=85% + ' + bot.MIN_CONFIRM + '/4 indicators + 25-80c band');
   console.log('  leak-free: decision sees only candles closed before entry; settlement read only to grade');
+  console.log('  NB: replay spot = last CLOSED candle (~1min old). The live bot now reads spot from');
+  console.log('      /ticker (~2s old) — V7 read it from the candle feed 1-5min behind, which is what');
+  console.log('      turned this +$2.09/trade into a live -$0.63/trade. See stalecheck.js.');
   console.log('  ' + '─'.repeat(74));
   console.log('');
   console.log('  stop    trades   net PnL     win%    avgWin   avgLoss   b/e     exit mix (cashout/settle-win/settle-loss/stop)');

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Indicators Bot · V7 Engine</title>
+<title>Indicators Bot · V8 Engine</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root{
@@ -98,7 +98,7 @@
 <body>
 <header><div class="wrap hbar">
   <span class="dot" id="dot"></span>
-  <span class="logo"><span class="z">⚡</span> Indicators <span class="muted">· V7 Engine</span></span>
+  <span class="logo"><span class="z">⚡</span> Indicators <span class="muted">· V8 Engine</span></span>
   <span class="hspace"></span>
   <div class="heq"><div class="v mono" id="hEquity">—</div><div class="l" id="hPnl">equity</div></div>
 </div></header>
@@ -126,6 +126,15 @@
     <div class="card" style="margin-bottom:14px">
       <h3>Equity Curve</h3>
       <div class="chartbox"><canvas id="eqChart"></canvas></div>
+    </div>
+
+    <div class="card" id="freshCard" style="margin-bottom:14px">
+      <h3>🕐 Data Freshness <span class="muted">· the V7 killer, now instrumented</span></h3>
+      <div class="grid g3" id="freshBox"></div>
+      <p class="note">V7 read spot from Coinbase's 1-minute candle feed, which runs <b>1–5 minutes behind</b> the
+        clock. It decided on prices the Kalshi book had already repriced and paid the ask for the privilege —
+        that alone cost ~12 points of win rate. V8 reads spot from <code>/ticker</code> and records the age of
+        every fill. <b>If the spot-age numbers above ever climb into minutes, the V7 failure mode is back.</b></p>
     </div>
 
     <div class="grid g2" style="margin-bottom:14px">
@@ -186,7 +195,9 @@
       </div>
       <div class="card"><h3>By Confidence (engine)</h3>
         <div id="confRows"></div>
-        <p class="note">Backtest sweet spot is the <b>88–90%</b> bucket (+$3.69/trade). The engine is roughly calibrated but edge isn't monotonic — why size stays flat.</p>
+        <p class="note">On a <b>fresh</b> spot the engine's ≥97% bucket is rare (1.2% of backtest entries).
+          V7's stale spot inflated it to 8.9% of live trades and that bucket won only 42%. Watch this table:
+          if the top bucket fills up again, the spot has gone stale.</p>
       </div>
     </div>
     <div class="card">
@@ -202,29 +213,78 @@
   <!-- STRATEGY -->
   <section id="strategy">
     <div class="card strat" style="margin-bottom:14px">
-      <h3>How It Trades</h3>
-      <p><b>Engine.</b> A z-score model prices how far spot sits from the strike given realized volatility and time left, and picks a side only at <b>≥85% confidence</b>. Then <b>2 of 4 indicators</b> (RSI, EMA9/EMA20 cross, Bollinger mid, VWAP) must agree before it acts.</p>
+      <h3>How It Trades <span class="muted">· V8</span></h3>
+      <p><b>Spot.</b> The current price comes from Coinbase's <code>/ticker</code> — median age <b>1.8 seconds</b>.
+        This is the V8 change and the reason the bot exists in this form; see the autopsy below.</p>
+      <p><b>Engine.</b> A z-score model prices how far spot sits from the strike given realized volatility and
+        time left, and picks a side only at <b>≥85% confidence</b>. Then <b>3 of 4 indicators</b> (RSI, EMA9/EMA20
+        cross, Bollinger mid, VWAP) must agree before it acts.</p>
       <p><b>Entry.</b> Only fills priced <b>25¢–80¢</b>. 30 contracts flat. Max 3 positions at once.</p>
       <p><b>Exit.</b> Cash out at <b>97¢</b> if the market gets there; otherwise hold to settlement. No stop-loss.</p>
       <p><b>Universe.</b> <span id="coinPills"></span></p>
     </div>
 
+    <div class="card strat" style="margin-bottom:14px;border-color:#5b3a3f">
+      <h3>💀 Autopsy — why V7 lost 85% of the bankroll</h3>
+      <p>V7 ran <b>$100 → $301 → $14.75</b> over 135 trades while its own backtest, over 1,806 settled markets,
+        said the same entry gate was worth <b>+$2.09/trade</b>. Both numbers were correct. The bot was not running
+        the strategy the backtest measured.</p>
+      <p><b>The bug was one line:</b> <code>spot = candles[0].close</code>. Coinbase's 1-minute candle feed lags
+        the wall clock by 1–5 minutes per product (measured: BTC 1m, ETH 2m, SOL/XRP 3m, HYPE 4m, DOGE/BNB 5m —
+        a mean 8.9 bps and up to 29 bps from the real price). A 15-minute crypto binary sits only tens of bps from
+        its strike, so the entire directional signal was being computed on a price the market had already moved
+        past. On a live sample, <b>6 of 7 coins picked the opposite side</b> under the stale spot.</p>
+      <p><b>It compounded.</b> <code>sigma = vol × √minutesLeft</code> used a fresh clock with a stale price, so
+        the real horizon was longer than the one priced. Understated sigma inflates |z|, which inflates confidence:
+        V7 claimed ≥97% on <b>8.9%</b> of trades where a fresh-spot backtest produces it on <b>1.2%</b> — and that
+        top-confidence bucket was its single worst, <b>42% win rate, −$112.58</b>.</p>
+      <p><b>Proof, not a story.</b> Re-running the backtest with the spot deliberately pushed back reproduces the
+        live result on two independent signatures:</p>
+      <div class="kv" style="margin:10px 0 0">
+        <span class="k">fresh spot</span><span>83.1% win · +$2.09/trade · conf≥97% on 1.2%</span>
+        <span class="k">2 min stale</span><span>70.2% win · −$0.07/trade · conf≥97% on 7.3%</span>
+        <span class="k">3 min stale</span><span>67.2% win · +$0.06/trade · conf≥97% on 8.7%</span>
+        <span class="k"><b>V7 live</b></span><span><b>71.1% win · −$0.63/trade · conf≥97% on 8.9%</b></span>
+      </div>
+      <p class="note">Live landed between 2 and 3 minutes of lag — exactly the measured feed age. The payoff side
+        was never wrong: avg win +$7.36 live vs +$6.81 backtest, avg loss −$20.29 vs −$21.11. Fills, fees and
+        exits were modelled correctly. Only the direction call was degraded.</p>
+    </div>
+
     <div class="grid g2" style="margin-bottom:14px">
       <div class="card strat"><h3>🛡️ Correlation Guard</h3>
-        <p>15-min crypto moves as one asset class, so N same-direction bets settling in the same window are really <b>one leveraged bet</b>. The bot allows <b>one position per direction per settlement window</b> — an opposite-direction bet in the same window is still fine (it hedges).</p>
+        <p>15-min crypto moves as one asset class, so N same-direction bets settling in the same window are really
+          <b>one leveraged bet</b>. The bot allows <b>one position per direction per settlement window</b> — an
+          opposite-direction bet in the same window is still fine (it hedges).</p>
         <p class="muted">This is the fix for the day three same-window DOWN bets lost together ($100→$35).</p>
       </div>
       <div class="card strat"><h3>🎯 The 0.80 Cap</h3>
-        <p>A binary bought at price p needs ~p win-rate just to break even. The <b>85–90¢</b> band is net negative even at ~90% win (you risk 85¢ to make 15¢). Full replay: the <b>75–80¢</b> bucket is the money maker (+$458, 90% win), so entries cap at <b>80¢</b>.</p>
+        <p>A binary bought at price p needs ~p win-rate just to break even. The <b>85–90¢</b> band is net negative
+          even at ~90% win (you risk 85¢ to make 15¢), so entries cap at <b>80¢</b>. On a fresh spot the grid
+          search says this cap is already optimal — tightening to 75¢ or 70¢ <i>costs</i> money
+          (+$267 and +$114 against +$718 at 80¢), because it sheds the winners along with the losers.</p>
       </div>
     </div>
 
     <div class="card strat">
       <h3>🔬 What We Tested & Rejected</h3>
-      <p><b>Stop-loss</b> — every level loses vs. holding to settlement (baseline +$718 beats best stop +$420). Losers often recover; stopping locks them in.</p>
-      <p><b>Early take-profit</b> — cashing at 90¢ instead of 97¢ costs ~$305 per 343 trades. Only rescues a handful of losers while trimming every winner.</p>
-      <p><b>Confidence-scaled sizing</b> — engine is decently calibrated but $/trade isn't monotonic in confidence, so scaling would misallocate. Size stays flat at 30.</p>
-      <p class="note">Backtested over 343 entries / ~2,000 markets. Two big levers already shipped: the entry cap and the correlation guard.</p>
+      <p><b>Stop-loss</b> — every level loses vs. holding to settlement (baseline +$718 beats best stop +$420).
+        Losers often recover; stopping locks them in.</p>
+      <p><b>Early take-profit</b> — cashing at 90¢ instead of 97¢ costs ~$305 per 343 trades. Only rescues a
+        handful of losers while trimming every winner.</p>
+      <p><b>Lower entry cap</b> — 75¢/70¢/65¢ all reduce net PnL. The expensive band looked like the villain in
+        the live trades, but that was the stale spot's win-rate damage showing up where the bot happened to
+        concentrate, not the price band itself.</p>
+      <p><b>Confidence / |z| ceilings</b> — no help once the spot is fresh, because the inflated top end was an
+        artifact of the lag. Fixing the cause removed the symptom: capping confidence at 97% changes 1 trade in 343.</p>
+      <p><b>Confidence-scaled sizing</b> — $/trade isn't monotonic in confidence, so scaling would misallocate.
+        Size stays flat at 30.</p>
+      <p><b>Adopted:</b> 3/4 indicator confirmations instead of 2/4 — +$800.92 vs +$717.81 over the same 1,806
+        markets, +$2.45/trade, 84.7% win, breakeven margin 8.6pp vs 7.5pp, positive in both chronological halves.</p>
+      <p class="note">Every figure above is from <code>gridsearch.js</code> / <code>replay.js</code> /
+        <code>stalecheck.js</code>, which import the live bot's own decision functions, so the backtest cannot
+        drift from production. Leak discipline: the entry decision only sees candles that closed before entry;
+        settlement is read solely to grade a position already opened.</p>
     </div>
   </section>
 
@@ -392,9 +452,32 @@ function render(s){
   const allCoins = ['BTC','ETH','SOL','XRP','HYPE','DOGE','BNB'];
   $('coinPills').innerHTML = allCoins.map(c=>`<span class="pill">${c}</span>`).join('');
 
+  // data freshness — the V7 regression canary. Reads spotAgeMs/candleAgeMs which
+  // V8 stamps on every fill; trades from before V8 simply have no reading.
+  const fills=[...m.trades,...m.open].filter(x=>x.spotAgeMs!=null);
+  const fb=$('freshBox');
+  if(!fills.length){
+    fb.innerHTML='<div class="kpi"><div class="n mono muted">—</div><div class="sub">no V8 fills yet · age is stamped on every entry</div></div>';
+  } else {
+    const spot=fills.map(x=>x.spotAgeMs/1000).sort((a,b)=>a-b);
+    const cnd=fills.filter(x=>x.candleAgeMs!=null).map(x=>x.candleAgeMs/1000).sort((a,b)=>a-b);
+    const med=a=>a.length?a[Math.floor(a.length/2)]:null;
+    const worst=a=>a.length?a[a.length-1]:null;
+    const bad=med(spot)>45;
+    fb.innerHTML=
+      `<div class="kpi"><h3>Spot age (median)</h3><div class="n mono ${bad?'red':'green'}">${med(spot).toFixed(1)}s</div>`+
+      `<div class="sub">worst ${worst(spot).toFixed(1)}s · V7 ran 60–300s</div></div>`+
+      `<div class="kpi"><h3>Candle age (median)</h3><div class="n mono muted">${cnd.length?(med(cnd)/60).toFixed(1)+'m':'—'}</div>`+
+      `<div class="sub">indicators only — not the direction call</div></div>`+
+      `<div class="kpi"><h3>Fills measured</h3><div class="n mono">${fills.length}</div>`+
+      `<div class="sub">${bad?'⚠️ spot is drifting stale':'✅ fresh — fix holding'}</div></div>`;
+  }
+
   // footer
   const started = s.startedAt? new Date(s.startedAt).toLocaleString('en-US',{timeZone:'America/New_York'}) : '?';
-  $('foot').textContent = `Paper bankroll · started ${started} ET · ${m.trades.length} trades · auto-refresh 20s`;
+  const arch=(s.archive||[]).slice(-1)[0];
+  $('foot').textContent = `${s.version||'V8'} · paper bankroll · started ${started} ET · ${m.trades.length} trades · auto-refresh 20s`
+    + (arch? ` · prior run ended $${Number(arch.bankroll||0).toFixed(2)} over ${arch.trades} trades`:'');
   $('err').style.display='none';
 }
 

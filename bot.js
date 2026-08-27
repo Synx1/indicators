@@ -1,13 +1,43 @@
 #!/usr/bin/env node
 /**
- * V7 — Z-Score Engine + Indicator Confirmation (the proven 15W/1L config)
+ * V8 — Z-Score Engine + Indicator Confirmation, on a FRESH spot price.
  *
- * Momentum-chasing lost money in BOTH directions on 15-min crypto (whipsaw).
- * Reverting to what actually won: the Z-score model picks direction at high
- * confidence, indicators confirm, cheap entries, cashout at 95c.
+ * ── why V8 exists: the stale-spot bug ──
+ * V7 ran $100 -> $301 -> $14.75 over 135 trades while its own backtest said the
+ * same gate was worth +$2.09/trade over 1806 settled markets. The gap was not
+ * luck. V7 read spot from `candles[0].close` — Coinbase's 1-minute candle feed —
+ * and that feed runs 1 to 5 MINUTES behind the wall clock (measured: BTC 1m,
+ * ETH 2m, SOL/XRP 3m, HYPE 4m, DOGE/BNB 5m; mean 8.9 bps and up to 29 bps away
+ * from the ticker price). A 15-minute crypto binary usually sits only tens of bps
+ * from its strike, so V7 decided on a gap the Kalshi book had already repriced,
+ * and paid the ask for the privilege. It was the slow side of every trade.
  *
- * Entry: engine 85%+ conf + 2/4 indicators agree + price 25-80c
- * Cashout: 97c | No stop | 30 shares | status=open market query (critical fix)
+ * It compounded: sigma = vol * sqrt(minutesLeft) took minutesLeft from Kalshi's
+ * clock (fresh) while spot came from minutes earlier, so the true horizon was
+ * longer than the one priced. Understated sigma inflates |z|, which inflates
+ * confidence — V7 reported 85%+ on phantom edges and produced conf>=97% on 8.9%
+ * of trades where a fresh-spot backtest produces it on 1.2%. Those top-confidence
+ * trades were its worst bucket: 42% win rate, -$112.58.
+ *
+ * Injecting the same lag into the backtest reproduces the live result on two
+ * independent signatures (see stalecheck.js):
+ *      lag 0m -> 83.1% win, +$2.09/trade, conf>=97% on 1.2%
+ *      lag 2m -> 70.2% win, -$0.07/trade, conf>=97% on 7.3%
+ *      lag 3m -> 67.2% win, +$0.06/trade, conf>=97% on 8.7%
+ *      LIVE   -> 71.1% win, -$0.63/trade, conf>=97% on 8.9%
+ * Live lands between 2 and 3 minutes of lag, exactly the measured feed age.
+ *
+ * ── the fix ──
+ * spot now comes from Coinbase's /ticker (median age 1.8s, 32ms round trip, 0/21
+ * failures) instead of the candle feed. Candles still supply the trend indicators
+ * and the vol estimate, where a couple of minutes is second-order. If the ticker
+ * fails we SKIP the coin rather than fall back to the stale candle — falling back
+ * is the bug. A hard candle-age ceiling rejects windows too old to compute vol on.
+ *
+ * Entry: engine 85%+ conf + 3/4 indicators agree + price 25-80c   (was 2/4:
+ *   3/4 scores +$800.92 vs +$717.81 over the same 1806 markets, +$2.45/trade,
+ *   84.7% win, breakeven margin 8.6pp vs 7.5pp, positive in both halves)
+ * Cashout: 97c | No stop | 30 shares | status=open market query
  * Fees: Kalshi ceil(0.07*C*P*(1-P)) modeled on entry + cashout so PnL is honest.
  * Sweeper: force-settles positions still open long after their market closed.
  */
@@ -44,6 +74,20 @@ const COINS = [
 ];
 
 const SHARES = 30, CASHOUT = 0.97, MAX_POS = 3, MIN_CONF = 85;
+// Indicator confirmations required out of 4. Raised from 2 in V8: over the same
+// 1806 settled markets, >=3/4 nets +$800.92 (+$2.45/trade, 84.7% win, 8.6pp of
+// breakeven margin) against >=2/4's +$717.81 (+$2.09, 83.1%, 7.5pp), and stays
+// positive in both chronological halves. 4/4 gives no further margin and drops
+// 19% of the entries, so 3 is the knee.
+const MIN_CONFIRM = 3;
+// A spot price older than this is not worth trading on — see the V8 note above.
+// The ticker normally reports a last trade 1-3s old; 45s means the venue has gone
+// quiet or the feed is degraded, and the whole edge here is being timely.
+const MAX_SPOT_AGE_MS = 45 * 1000;
+// The candle window only supplies trend indicators and the vol estimate, both of
+// which tolerate some lag — but past ~12 minutes a 15-minute market's realized
+// vol is being measured on a different regime than the one being traded.
+const MAX_CANDLE_AGE_MS = 12 * 60 * 1000;
 
 // State lives on the Railway volume (mounted at /data) so the bankroll + trade
 // history survive redeploys. The container filesystem is wiped on every deploy,
@@ -63,9 +107,21 @@ try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
 // bankroll. To force a clean $100 restart, bump RESET_TOKEN: on the next boot
 // the stored token won't match, so we wipe to a fresh $100 baseline exactly once
 // and record the new token — every later redeploy then keeps trading from there.
-const RESET_TOKEN = '2026-08-26-fresh-100';
+//
+// This bump is deliberate and authorized: V7 ended at $14.75 on the stale-spot
+// bug, and V8's record has to start from a clean $100 or the two configs are
+// mixed in one equity curve and neither can be judged. The V7 trades are archived
+// under state.archive so the autopsy stays readable.
+const RESET_TOKEN = '2026-08-27-v8-freshspot-100';
 if (state.resetToken !== RESET_TOKEN) {
-  state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString(), resetToken: RESET_TOKEN };
+  const prior = {
+    endedAt: new Date().toISOString(), token: state.resetToken || null,
+    bankroll: state.bankroll, trades: (state.trades || []).length,
+    note: 'V7 — spot read from the lagging Coinbase candle feed; see bot.js header'
+  };
+  const archive = (state.archive || []).concat([prior]).slice(-5);
+  state = { bankroll: 100, trades: [], open: [], startedAt: new Date().toISOString(),
+    resetToken: RESET_TOKEN, version: 'V8', archive };
   try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch (_) {}
 }
 
@@ -170,6 +226,33 @@ function engineEvaluate(spot, strike, minutesLeft, candles) {
 async function getCandles(product) {
   const { data } = await axios.get(`${COINBASE}/${product}/candles`, { params: { granularity: 60 }, timeout: 10000 });
   return (data || []).slice(0, 60).map(c => ({ time: c[0], low: c[1], high: c[2], open: c[3], close: c[4], volume: c[5] }));
+}
+/**
+ * The current traded price, and how old it is.
+ *
+ * This exists because `candles[0].close` — what V7 used — is not the current
+ * price. Coinbase's 1-minute candle feed lags the wall clock by 1-5 minutes
+ * depending on the product, and the z-score gap (spot - strike) is the entire
+ * directional signal, so a stale spot is a wrong signal that the Kalshi book has
+ * already corrected. /ticker reports the last trade with its timestamp; measured
+ * median age 1.8s against the candle feed's minutes.
+ *
+ * Returns null on a failed or stale read. The caller must SKIP on null — never
+ * fall back to the candle close, because that is precisely the defect.
+ */
+async function getSpot(product) {
+  try {
+    const { data } = await axios.get(`${COINBASE}/${product}/ticker`, { timeout: 8000 });
+    const price = parseFloat(data && data.price);
+    if (!(price > 0)) return null;
+    // `time` is the last trade's timestamp. A missing one means we cannot prove
+    // freshness, and an unprovable spot is treated as stale.
+    const ts = data.time ? new Date(data.time).getTime() : NaN;
+    if (!Number.isFinite(ts)) return null;
+    const ageMs = Date.now() - ts;
+    if (ageMs > MAX_SPOT_AGE_MS) return { price, ageMs, stale: true };
+    return { price, ageMs, stale: false };
+  } catch (_) { return null; }
 }
 async function findActive(series) {
   try {
@@ -285,7 +368,24 @@ async function scan() {
       const candles = await getCandles(coin.product);
       if (candles.length < 15) continue;
 
-      const spot = candles[0].close;
+      // The candle window feeds the indicators and the vol estimate only. If it
+      // is far enough behind that its realized vol describes a different regime,
+      // there is nothing here worth sizing a bet on.
+      const candleAgeMs = Date.now() - candles[0].time * 1000;
+      if (candleAgeMs > MAX_CANDLE_AGE_MS) {
+        log(`⏭️  ${coin.sym} skipped — candle feed ${Math.round(candleAgeMs / 60000)}m stale`);
+        continue;
+      }
+
+      // SPOT comes from the ticker, not from candles[0].close. This one line is
+      // the V7 -> V8 fix; see the header note. No fallback on failure — trading a
+      // stale spot is the bug we are removing, so a failed read means skip.
+      const s = await getSpot(coin.product);
+      if (!s || s.stale) {
+        if (s && s.stale) log(`⏭️  ${coin.sym} skipped — spot ${Math.round(s.ageMs / 1000)}s stale`);
+        continue;
+      }
+      const spot = s.price;
       const minLeft = (new Date(market.close_time) - Date.now()) / 60000;
       const yesAsk = parseFloat(market.yes_ask_dollars || 0);
       const noAsk = parseFloat(market.no_ask_dollars || 0);
@@ -295,7 +395,7 @@ async function scan() {
       const result = engineEvaluate(spot, strike, minLeft, candles);
       if (result.confidence < MIN_CONF || !result.side) continue;
 
-      // 2/4 INDICATOR CONFIRMATION
+      // 3/4 INDICATOR CONFIRMATION (was 2/4 — see MIN_CONFIRM)
       const rsi = calcRSI(candles, 14);
       const ema9 = calcEMA(candles, 9);
       const ema20 = calcEMA(candles, 20);
@@ -313,7 +413,7 @@ async function scan() {
         if (bb && spot < bb.middle) confirm++;
         if (spot < vwap) confirm++;
       }
-      if (confirm < 2) continue;
+      if (confirm < MIN_CONFIRM) continue;
 
       const side = result.side;
       // Correlation guard — 15-min crypto moves as one asset class, so multiple
@@ -347,10 +447,14 @@ async function scan() {
       const direction = side === 'YES' ? 'UP' : 'DOWN';
       const pos = { ticker: market.ticker, sym: coin.sym, side, direction, price, shares: SHARES, cost, entryFee,
         closeTime: market.close_time, strike,
+        // spotAgeMs / candleAgeMs are recorded on every fill so the stale-spot
+        // defect can never silently return: if these start creeping into minutes,
+        // the V7 failure mode is back and the dashboard will show it.
+        spotAgeMs: s.ageMs, candleAgeMs: Math.round(candleAgeMs),
         confidence: result.confidence, z: result.z, rsi: Math.round(rsi), confirm, entryType, enteredAt: new Date().toISOString() };
       state.open.push(pos);
       save();
-      log(`🎯 ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% z=${result.z} ${confirm}/4 | fee $${entryFee.toFixed(2)} | ${entryType}`);
+      log(`🎯 ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% z=${result.z} ${confirm}/4 | spot ${(s.ageMs/1000).toFixed(1)}s old | fee $${entryFee.toFixed(2)} | ${entryType}`);
       webhook(`🎯 **ENTRY** ${coin.sym} ${direction} @${Math.round(price*100)}c | ENGINE ${result.confidence}% (${confirm}/4 ind) | ${entryType} | Bank: $${state.bankroll.toFixed(2)}`);
     } catch (_) {}
     await new Promise(r => setTimeout(r, 300));
@@ -358,11 +462,12 @@ async function scan() {
 }
 
 async function main() {
-  log('=== V7 ENGINE + INDICATORS (proven 15W/1L config) ===');
-  log(`Engine ${MIN_CONF}%+ | 2/4 indicators | Entry 25-80c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
+  log('=== V8 ENGINE + INDICATORS — FRESH SPOT ===');
+  log(`Engine ${MIN_CONF}%+ | ${MIN_CONFIRM}/4 indicators | Entry 25-80c | Cashout ${Math.round(CASHOUT*100)}c | ${SHARES}sh`);
+  log(`spot from /ticker (max ${MAX_SPOT_AGE_MS/1000}s old) — V7 read it from the candle feed, 1-5 MINUTES behind`);
   log(`Bankroll: $${state.bankroll.toFixed(2)} | Trades: ${state.trades.length} | Open: ${state.open.length}`);
   log('');
-  webhook(`🚀 **V7 ENGINE BOT STARTED** — back to the proven winner\nEngine ${MIN_CONF}%+ conf + 2/4 indicators | 25-80c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
+  webhook(`🚀 **V8 STARTED — stale-spot bug fixed**\nV7 lost 85% of bank reading spot from a candle feed 1-5min behind the clock. Spot now comes from /ticker (~2s old).\nEngine ${MIN_CONF}%+ + ${MIN_CONFIRM}/4 indicators | 25-80c | cashout 97c\nBankroll: $${state.bankroll.toFixed(2)}`);
   while (true) {
     try { await checkCashouts(); await sweepStuck(); await scan(); } catch (e) { log('Err: ' + e.message); }
     await new Promise(r => setTimeout(r, 5000));
@@ -378,5 +483,6 @@ if (require.main === module) {
 module.exports = {
   engineEvaluate, realizedVol,
   calcRSI, calcEMA, calcBollingerBands, calcVWAP,
-  COINS, SHARES, CASHOUT, MAX_POS, MIN_CONF
+  getSpot, getCandles,
+  COINS, SHARES, CASHOUT, MAX_POS, MIN_CONF, MIN_CONFIRM
 };
