@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Indicators Bot · V7 Engine</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0c11; --panel:#12151d; --panel2:#171b25; --line:#232836;
+    --txt:#e6e9ef; --muted:#8b93a7; --dim:#5b6376;
+    --green:#22e08a; --greenbg:#0f2a1f; --red:#ff5c6c; --redbg:#2a1216;
+    --blue:#5b9dff; --amber:#ffb84d; --violet:#a98bff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{background:radial-gradient(1200px 600px at 70% -10%,#141a2b 0%,var(--bg) 60%);
+    color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    min-height:100vh;padding-bottom:60px;line-height:1.45}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+
+  /* Header */
+  header{position:sticky;top:0;z-index:20;backdrop-filter:blur(12px);
+    background:rgba(10,12,17,.82);border-bottom:1px solid var(--line)}
+  .hbar{display:flex;align-items:center;gap:14px;padding:14px 0}
+  .logo{font-size:1.15em;font-weight:700;letter-spacing:.3px;white-space:nowrap}
+  .logo .z{color:var(--blue)}
+  .hspace{flex:1}
+  .heq{text-align:right;line-height:1.15}
+  .heq .v{font-size:1.35em;font-weight:700}
+  .heq .l{font-size:.68em;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 0 0 rgba(34,224,138,.6);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,224,138,.5)}70%{box-shadow:0 0 0 8px rgba(34,224,138,0)}100%{box-shadow:0 0 0 0 rgba(34,224,138,0)}}
+
+  /* Tabs */
+  nav{position:sticky;top:57px;z-index:19;background:rgba(10,12,17,.82);backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tabs{display:flex;gap:4px;padding:8px 0}
+  .tab{background:none;border:0;color:var(--muted);font:inherit;font-size:.92em;font-weight:600;
+    padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap;transition:.15s}
+  .tab:hover{color:var(--txt);background:var(--panel)}
+  .tab.on{color:#fff;background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+
+  section{display:none;padding-top:22px;animation:fade .25s}
+  section.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* Cards */
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:820px){.g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr}.g2{grid-template-columns:1fr}}
+  @media(max-width:460px){.g4{grid-template-columns:1fr 1fr}}
+  .card{background:linear-gradient(180deg,var(--panel) 0%,#0f121a 100%);
+    border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card h3{font-size:.72em;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;font-weight:700;margin-bottom:10px}
+  .kpi .n{font-size:1.9em;font-weight:700;letter-spacing:-.5px}
+  .kpi .sub{font-size:.82em;color:var(--muted);margin-top:3px}
+  .green{color:var(--green)} .red{color:var(--red)} .blue{color:var(--blue)} .amber{color:var(--amber)} .muted{color:var(--muted)}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:.9em;border-bottom:1px solid #1a1e28}
+  .row:last-child{border-bottom:0}
+  .row .k{color:var(--muted)}
+
+  .chartbox{position:relative;height:260px}
+  .chartbox.sm{height:200px}
+
+  table{width:100%;border-collapse:collapse;font-size:.86em}
+  thead th{text-align:left;color:var(--dim);font-weight:600;padding:9px 8px;border-bottom:1px solid var(--line);
+    text-transform:uppercase;font-size:.82em;letter-spacing:.4px;position:sticky;top:0}
+  tbody td{padding:9px 8px;border-bottom:1px solid #161a23}
+  tbody tr:hover{background:#141822}
+  .tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.82em;font-weight:600}
+  .t-up{background:var(--greenbg);color:var(--green)} .t-down{background:var(--redbg);color:var(--red)}
+  .t-win{background:var(--greenbg);color:var(--green)} .t-loss{background:var(--redbg);color:var(--red)}
+  .t-cash{background:#0f2233;color:var(--blue)} .t-unres{background:#2a2410;color:var(--amber)}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .scroll{max-height:560px;overflow:auto;border-radius:10px}
+
+  .bar{height:7px;border-radius:5px;background:#1c2130;overflow:hidden;margin-top:6px}
+  .bar>span{display:block;height:100%;border-radius:5px}
+
+  .note{color:var(--muted);font-size:.86em;margin-top:12px}
+  .lead{color:var(--muted);font-size:.95em;margin:-4px 0 4px}
+  .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.78em;font-weight:600;
+    background:var(--panel2);border:1px solid var(--line);color:var(--muted);margin:0 6px 6px 0}
+  .strat p{color:#c7cdda;font-size:.93em;margin:8px 0}
+  .strat b{color:#fff}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:.9em;margin-top:6px}
+  .kv .k{color:var(--muted)}
+  .foot{color:var(--dim);font-size:.8em;text-align:center;margin-top:26px}
+  .spark{height:44px}
+  .err{background:var(--redbg);border:1px solid var(--red);color:#ffd7db;padding:10px 14px;border-radius:10px;margin-top:16px;font-size:.9em;display:none}
+</style>
+</head>
+<body>
+<header><div class="wrap hbar">
+  <span class="dot" id="dot"></span>
+  <span class="logo"><span class="z">⚡</span> Indicators <span class="muted">· V7 Engine</span></span>
+  <span class="hspace"></span>
+  <div class="heq"><div class="v mono" id="hEquity">—</div><div class="l" id="hPnl">equity</div></div>
+</div></header>
+
+<nav><div class="wrap tabs" id="tabs">
+  <button class="tab on" data-t="overview">Overview</button>
+  <button class="tab" data-t="trades">Trades</button>
+  <button class="tab" data-t="coins">Coins</button>
+  <button class="tab" data-t="timing">Timing</button>
+  <button class="tab" data-t="strategy">Strategy</button>
+</div></nav>
+
+<div class="wrap">
+  <div class="err" id="err"></div>
+
+  <!-- OVERVIEW -->
+  <section class="on" id="overview">
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="card kpi"><h3>Equity</h3><div class="n mono" id="kEquity">—</div><div class="sub" id="kEquitySub">cash + open</div></div>
+      <div class="card kpi"><h3>Realized P&amp;L</h3><div class="n mono" id="kPnl">—</div><div class="sub" id="kRoi">ROI</div></div>
+      <div class="card kpi"><h3>Win Rate</h3><div class="n mono" id="kWin">—</div><div class="sub" id="kWL">W / L</div></div>
+      <div class="card kpi"><h3>Profit Factor</h3><div class="n mono" id="kPf">—</div><div class="sub">gross win ÷ gross loss</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h3>Equity Curve</h3>
+      <div class="chartbox"><canvas id="eqChart"></canvas></div>
+    </div>
+
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card">
+        <h3>Trade Economics</h3>
+        <div class="row"><span class="k">Avg win</span><span class="green mono" id="eAvgW">—</span></div>
+        <div class="row"><span class="k">Avg loss</span><span class="red mono" id="eAvgL">—</span></div>
+        <div class="row"><span class="k">Best trade</span><span class="green mono" id="eBest">—</span></div>
+        <div class="row"><span class="k">Worst trade</span><span class="red mono" id="eWorst">—</span></div>
+        <div class="row"><span class="k">Current streak</span><span class="mono" id="eStreak">—</span></div>
+        <div class="row"><span class="k">Total fees paid</span><span class="muted mono" id="eFees">—</span></div>
+      </div>
+      <div class="card">
+        <h3>Open Positions <span class="muted" id="oCount"></span></h3>
+        <div id="openBox"><p class="muted" style="font-size:.9em">None open right now.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TRADES -->
+  <section id="trades">
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="card kpi"><h3>Total Trades</h3><div class="n mono" id="tTotal">—</div><div class="sub" id="tOpen">open</div></div>
+      <div class="card kpi"><h3>Cashouts</h3><div class="n mono blue" id="tCash">—</div><div class="sub">hit 97¢ target</div></div>
+      <div class="card kpi"><h3>Settled Wins</h3><div class="n mono green" id="tSw">—</div><div class="sub">held to yes</div></div>
+      <div class="card kpi"><h3>Losses</h3><div class="n mono red" id="tLoss">—</div><div class="sub" id="tUnres">incl. unresolved</div></div>
+    </div>
+    <div class="card">
+      <h3>Trade Log <span class="muted">· newest first</span></h3>
+      <div class="scroll"><table>
+        <thead><tr><th>Time (ET)</th><th>Coin</th><th>Dir</th><th>Entry</th><th>Exit</th><th>Conf</th><th>z</th><th>Result</th><th style="text-align:right">P&amp;L</th></tr></thead>
+        <tbody id="tradeBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- COINS -->
+  <section id="coins">
+    <div class="card" style="margin-bottom:14px">
+      <h3>Net P&amp;L by Coin</h3>
+      <div class="chartbox"><canvas id="coinChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Per-Coin Breakdown</h3>
+      <div class="scroll"><table>
+        <thead><tr><th>Coin</th><th>Trades</th><th>Record</th><th>Win%</th><th>Avg P&amp;L</th><th style="text-align:right">Net P&amp;L</th></tr></thead>
+        <tbody id="coinBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- TIMING -->
+  <section id="timing">
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h3>By Direction</h3>
+        <div class="chartbox sm"><canvas id="dirChart"></canvas></div>
+        <div id="dirRows" style="margin-top:10px"></div>
+      </div>
+      <div class="card"><h3>By Confidence (engine)</h3>
+        <div id="confRows"></div>
+        <p class="note">Backtest sweet spot is the <b>88–90%</b> bucket (+$3.69/trade). The engine is roughly calibrated but edge isn't monotonic — why size stays flat.</p>
+      </div>
+    </div>
+    <div class="card">
+      <h3>By Hour (ET)</h3>
+      <div class="chartbox sm"><canvas id="hourChart"></canvas></div>
+      <div class="scroll" style="margin-top:12px"><table>
+        <thead><tr><th>Hour</th><th>Record</th><th>Win%</th><th style="text-align:right">Net P&amp;L</th></tr></thead>
+        <tbody id="hourBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- STRATEGY -->
+  <section id="strategy">
+    <div class="card strat" style="margin-bottom:14px">
+      <h3>How It Trades</h3>
+      <p><b>Engine.</b> A z-score model prices how far spot sits from the strike given realized volatility and time left, and picks a side only at <b>≥85% confidence</b>. Then <b>2 of 4 indicators</b> (RSI, EMA9/EMA20 cross, Bollinger mid, VWAP) must agree before it acts.</p>
+      <p><b>Entry.</b> Only fills priced <b>25¢–80¢</b>. 30 contracts flat. Max 3 positions at once.</p>
+      <p><b>Exit.</b> Cash out at <b>97¢</b> if the market gets there; otherwise hold to settlement. No stop-loss.</p>
+      <p><b>Universe.</b> <span id="coinPills"></span></p>
+    </div>
+
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card strat"><h3>🛡️ Correlation Guard</h3>
+        <p>15-min crypto moves as one asset class, so N same-direction bets settling in the same window are really <b>one leveraged bet</b>. The bot allows <b>one position per direction per settlement window</b> — an opposite-direction bet in the same window is still fine (it hedges).</p>
+        <p class="muted">This is the fix for the day three same-window DOWN bets lost together ($100→$35).</p>
+      </div>
+      <div class="card strat"><h3>🎯 The 0.80 Cap</h3>
+        <p>A binary bought at price p needs ~p win-rate just to break even. The <b>85–90¢</b> band is net negative even at ~90% win (you risk 85¢ to make 15¢). Full replay: the <b>75–80¢</b> bucket is the money maker (+$458, 90% win), so entries cap at <b>80¢</b>.</p>
+      </div>
+    </div>
+
+    <div class="card strat">
+      <h3>🔬 What We Tested & Rejected</h3>
+      <p><b>Stop-loss</b> — every level loses vs. holding to settlement (baseline +$718 beats best stop +$420). Losers often recover; stopping locks them in.</p>
+      <p><b>Early take-profit</b> — cashing at 90¢ instead of 97¢ costs ~$305 per 343 trades. Only rescues a handful of losers while trimming every winner.</p>
+      <p><b>Confidence-scaled sizing</b> — engine is decently calibrated but $/trade isn't monotonic in confidence, so scaling would misallocate. Size stays flat at 30.</p>
+      <p class="note">Backtested over 343 entries / ~2,000 markets. Two big levers already shipped: the entry cap and the correlation guard.</p>
+    </div>
+  </section>
+
+  <div class="foot" id="foot">loading…</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const usd = n => (n<0?'-$':'+$') + Math.abs(n||0).toFixed(2);
+const usd0 = n => '$' + (n||0).toFixed(2);
+const pct = n => (n||0).toFixed(1) + '%';
+const etTime = iso => { try{return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});}catch(e){return '—';} };
+const etHour = iso => { try{return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',timeZone:'America/New_York'});}catch(e){return '?';} };
+const isWin = t => (t.result==='WIN'||t.result==='CASHOUT'||(t.pnl||0)>0);
+const charts = {};
+
+// tab switching (preserves state across refresh)
+let activeTab = 'overview';
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tab'); if(!b) return;
+  activeTab = b.dataset.t;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===activeTab));
+  document.querySelectorAll('section').forEach(x=>x.classList.toggle('on',x.id===activeTab));
+});
+
+function metrics(s){
+  const trades = s.trades||[], open = s.open||[];
+  const openCost = open.reduce((a,p)=>a+(p.cost||0),0);
+  const equity = (s.bankroll||0)+openCost;
+  const realized = equity - 100;
+  const wins = trades.filter(isWin), losses = trades.filter(t=>!isWin(t));
+  const gW = wins.reduce((a,t)=>a+(t.pnl||0),0), gL = losses.reduce((a,t)=>a+(t.pnl||0),0);
+  const fees = trades.reduce((a,t)=>a+(t.entryFee||0)+(t.exitFee||0),0);
+  return {trades,open,openCost,equity,realized,wins,losses,gW,gL,fees,
+    winRate: trades.length? wins.length/trades.length*100 : 0,
+    roi: realized/100*100,
+    avgW: wins.length? gW/wins.length : 0,
+    avgL: losses.length? gL/losses.length : 0,
+    pf: gL!==0? gW/Math.abs(gL) : (gW>0?Infinity:0),
+    cash: trades.filter(t=>t.result==='CASHOUT').length,
+    sw: trades.filter(t=>t.result==='WIN').length,
+    loss: trades.filter(t=>t.result==='LOSS').length,
+    unres: trades.filter(t=>t.result==='UNRESOLVED').length};
+}
+
+function streak(trades){
+  if(!trades.length) return '—';
+  const last = isWin(trades[trades.length-1]);
+  let n=0; for(let i=trades.length-1;i>=0;i--){ if(isWin(trades[i])===last) n++; else break; }
+  return n + (last?' W':' L');
+}
+
+function mkChart(id,cfg){ if(charts[id]) charts[id].destroy(); const el=$(id); if(!el||!window.Chart) return; charts[id]=new Chart(el,cfg); }
+const GRID={color:'#1c2130'}, TICK={color:'#8b93a7',font:{size:11}};
+
+function render(s){
+  const m = metrics(s);
+  const pnlCls = m.realized>=0?'green':'red';
+
+  // header + overview KPIs
+  $('hEquity').textContent = usd0(m.equity); $('hEquity').className='v mono '+pnlCls;
+  $('hPnl').textContent = (m.realized>=0?'+':'')+usd0(m.realized).slice(1)+' · '+pct(m.roi);
+  $('kEquity').textContent = usd0(m.equity);
+  $('kEquitySub').textContent = 'cash '+usd0(s.bankroll||0)+(m.openCost?' + '+usd0(m.openCost)+' open':'');
+  $('kPnl').textContent = usd(m.realized); $('kPnl').className='n mono '+pnlCls;
+  $('kRoi').textContent = pct(m.roi)+' on $100';
+  $('kWin').textContent = pct(m.winRate);
+  $('kWL').textContent = m.wins.length+'W / '+m.losses.length+'L';
+  $('kPf').textContent = m.pf===Infinity?'∞':m.pf.toFixed(2);
+
+  // economics
+  $('eAvgW').textContent = usd(m.avgW);
+  $('eAvgL').textContent = usd(m.avgL);
+  const best = m.trades.reduce((b,t)=>(t.pnl||0)>(b?.pnl||-1e9)?t:b,null);
+  const worst = m.trades.reduce((b,t)=>(t.pnl||0)<(b?.pnl||1e9)?t:b,null);
+  $('eBest').textContent = best? usd(best.pnl)+' ('+best.sym+')':'—';
+  $('eWorst').textContent = worst? usd(worst.pnl)+' ('+worst.sym+')':'—';
+  $('eStreak').textContent = streak(m.trades);
+  $('eFees').textContent = '-'+usd0(m.fees).slice(0);
+
+  // open positions
+  $('oCount').textContent = m.open.length? '· '+m.open.length : '';
+  if(m.open.length){
+    $('openBox').innerHTML = '<div class="scroll"><table><thead><tr><th>Coin</th><th>Dir</th><th>Entry</th><th>Conf</th><th>Cost</th></tr></thead><tbody>'+
+      m.open.map(o=>`<tr><td><b>${o.sym}</b></td><td><span class="tag ${o.direction==='UP'?'t-up':'t-down'}">${o.direction}</span></td><td class="mono">${Math.round((o.price||0)*100)}¢</td><td class="mono">${o.confidence||'?'}%</td><td class="mono">${usd0(o.cost||0)}</td></tr>`).join('')+
+      '</tbody></table></div>';
+  } else { $('openBox').innerHTML = '<p class="muted" style="font-size:.9em">None open right now — all capital in cash.</p>'; }
+
+  // trades tab
+  $('tTotal').textContent = m.trades.length;
+  $('tOpen').textContent = m.open.length+' open now';
+  $('tCash').textContent = m.cash;
+  $('tSw').textContent = m.sw;
+  $('tLoss').textContent = m.loss+m.unres;
+  $('tUnres').textContent = m.unres? m.unres+' unresolved':'clean settlement';
+  const rmap = {CASHOUT:'t-cash',WIN:'t-win',LOSS:'t-loss',UNRESOLVED:'t-unres'};
+  $('tradeBody').innerHTML = m.trades.slice().reverse().map(t=>{
+    const r=t.result||(isWin(t)?'WIN':'LOSS');
+    return `<tr>
+      <td class="muted">${etTime(t.settledAt||t.enteredAt)}</td>
+      <td><b>${t.sym}</b></td>
+      <td><span class="tag ${t.direction==='UP'?'t-up':'t-down'}">${t.direction||''}</span></td>
+      <td class="mono">${Math.round((t.price||0)*100)}¢</td>
+      <td class="mono">${t.exitPrice?Math.round(t.exitPrice*100)+'¢':'—'}</td>
+      <td class="mono muted">${t.confidence||'?'}%</td>
+      <td class="mono muted">${t.z!=null?t.z:'—'}</td>
+      <td><span class="tag ${rmap[r]||''}">${r}</span></td>
+      <td class="mono ${(t.pnl||0)>=0?'pos':'neg'}" style="text-align:right">${usd(t.pnl)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="9" class="muted">No trades yet.</td></tr>';
+
+  // coins
+  const byCoin={};
+  for(const t of m.trades){ const k=t.sym||'?'; (byCoin[k] ||= {w:0,l:0,pnl:0,n:0}); byCoin[k].n++; isWin(t)?byCoin[k].w++:byCoin[k].l++; byCoin[k].pnl+=t.pnl||0; }
+  const coinArr = Object.entries(byCoin).sort((a,b)=>b[1].pnl-a[1].pnl);
+  $('coinBody').innerHTML = coinArr.map(([k,d])=>{
+    const wr = d.n? Math.round(d.w/d.n*100):0;
+    return `<tr><td><b>${k}</b></td><td class="mono">${d.n}</td><td class="mono">${d.w}W/${d.l}L</td><td class="mono">${wr}%</td><td class="mono muted">${usd(d.pnl/d.n)}</td><td class="mono ${d.pnl>=0?'pos':'neg'}" style="text-align:right">${usd(d.pnl)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">No trades yet.</td></tr>';
+  mkChart('coinChart',{type:'bar',data:{labels:coinArr.map(c=>c[0]),
+    datasets:[{data:coinArr.map(c=>+c[1].pnl.toFixed(2)),
+      backgroundColor:coinArr.map(c=>c[1].pnl>=0?'#22e08a':'#ff5c6c'),borderRadius:6}]},
+    options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:TICK},y:{grid:GRID,ticks:TICK}}}});
+
+  // equity curve
+  const settled = m.trades.slice().sort((a,b)=>new Date(a.settledAt||a.enteredAt)-new Date(b.settledAt||b.enteredAt));
+  let eq=100; const pts=[{x:0,y:100}]; const labels=['start'];
+  settled.forEach((t,i)=>{ eq+=t.pnl||0; pts.push({x:i+1,y:+eq.toFixed(2)}); labels.push(etTime(t.settledAt||t.enteredAt)); });
+  mkChart('eqChart',{type:'line',data:{labels,datasets:[{data:pts.map(p=>p.y),
+    borderColor:m.realized>=0?'#22e08a':'#ff5c6c',borderWidth:2,fill:true,tension:.28,pointRadius:0,
+    backgroundColor:ctx=>{const c=ctx.chart.ctx,g=c.createLinearGradient(0,0,0,260);
+      g.addColorStop(0,m.realized>=0?'rgba(34,224,138,.28)':'rgba(255,92,108,.28)');g.addColorStop(1,'rgba(0,0,0,0)');return g;}}]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>labels[i[0].dataIndex],label:c=>'Equity '+usd0(c.parsed.y)}}},
+      scales:{x:{grid:{display:false},ticks:{...TICK,maxTicksLimit:8}},y:{grid:GRID,ticks:{...TICK,callback:v=>'$'+v}}}}});
+
+  // timing — direction
+  const byDir={UP:{w:0,l:0,pnl:0,n:0},DOWN:{w:0,l:0,pnl:0,n:0}};
+  for(const t of m.trades){ const d=byDir[t.direction]||byDir.UP; d.n++; isWin(t)?d.w++:d.l++; d.pnl+=t.pnl||0; }
+  $('dirRows').innerHTML = ['UP','DOWN'].map(k=>{const d=byDir[k];const wr=d.n?Math.round(d.w/d.n*100):0;
+    return `<div class="row"><span class="k"><span class="tag ${k==='UP'?'t-up':'t-down'}">${k}</span> ${d.w}W/${d.l}L · ${wr}%</span><span class="mono ${d.pnl>=0?'pos':'neg'}">${usd(d.pnl)}</span></div>`;}).join('');
+  mkChart('dirChart',{type:'bar',data:{labels:['UP','DOWN'],datasets:[
+    {label:'Win',data:[byDir.UP.w,byDir.DOWN.w],backgroundColor:'#22e08a',borderRadius:5},
+    {label:'Loss',data:[byDir.UP.l,byDir.DOWN.l],backgroundColor:'#ff5c6c',borderRadius:5}]},
+    options:{plugins:{legend:{labels:{color:'#8b93a7',boxWidth:12}}},scales:{x:{stacked:true,grid:{display:false},ticks:TICK},y:{stacked:true,grid:GRID,ticks:TICK}}}});
+
+  // timing — confidence buckets (match engine calibration analysis)
+  const bk=[[85,87],[88,90],[91,93],[94,96],[97,100]];
+  const cb=bk.map(([lo,hi])=>{const sub=m.trades.filter(t=>(t.confidence||0)>=lo&&(t.confidence||0)<=hi);
+    const w=sub.filter(isWin).length;const pnl=sub.reduce((a,t)=>a+(t.pnl||0),0);
+    return{label:lo+'–'+hi+'%',n:sub.length,w,wr:sub.length?Math.round(w/sub.length*100):0,pnl};});
+  $('confRows').innerHTML = cb.map(d=>`<div class="row"><span class="k">${d.label}</span><span>${d.n?`<span class="mono">${d.n} trades · ${d.wr}%</span> <span class="mono ${d.pnl>=0?'pos':'neg'}">${usd(d.pnl)}</span>`:'<span class="muted mono">—</span>'}</span></div>`).join('');
+
+  // timing — hour
+  const byHour={};
+  for(const t of m.trades){ const h=etHour(t.settledAt||t.enteredAt); (byHour[h] ||= {w:0,l:0,pnl:0,n:0,sort:new Date(t.settledAt||t.enteredAt).getHours()}); byHour[h].n++; isWin(t)?byHour[h].w++:byHour[h].l++; byHour[h].pnl+=t.pnl||0; }
+  const hourArr = Object.entries(byHour).sort((a,b)=>a[1].sort-b[1].sort);
+  $('hourBody').innerHTML = hourArr.map(([h,d])=>{const wr=d.n?Math.round(d.w/d.n*100):0;
+    return `<tr><td>${h}</td><td class="mono">${d.w}W/${d.l}L</td><td class="mono">${wr}%</td><td class="mono ${d.pnl>=0?'pos':'neg'}" style="text-align:right">${usd(d.pnl)}</td></tr>`;}).join('') || '<tr><td colspan="4" class="muted">No trades yet.</td></tr>';
+  mkChart('hourChart',{type:'bar',data:{labels:hourArr.map(h=>h[0]),
+    datasets:[{data:hourArr.map(h=>+h[1].pnl.toFixed(2)),backgroundColor:hourArr.map(h=>h[1].pnl>=0?'#5b9dff':'#ff5c6c'),borderRadius:5}]},
+    options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:TICK},y:{grid:GRID,ticks:TICK}}}});
+
+  // strategy universe pills
+  const coinsSeen = coinArr.map(c=>c[0]);
+  const allCoins = ['BTC','ETH','SOL','XRP','HYPE','DOGE','BNB'];
+  $('coinPills').innerHTML = allCoins.map(c=>`<span class="pill">${c}</span>`).join('');
+
+  // footer
+  const started = s.startedAt? new Date(s.startedAt).toLocaleString('en-US',{timeZone:'America/New_York'}) : '?';
+  $('foot').textContent = `Paper bankroll · started ${started} ET · ${m.trades.length} trades · auto-refresh 20s`;
+  $('err').style.display='none';
+}
+
+async function tick(){
+  try{
+    const r = await fetch('/api/state',{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const s = await r.json();
+    render(s);
+  }catch(e){
+    const el=$('err'); el.style.display='block'; el.textContent='Live data unavailable ('+e.message+') — retrying…';
+    $('dot').style.background='#ff5c6c';
+  }
+}
+tick();
+setInterval(tick, 20000);
+</script>
+</body>
+</html>
