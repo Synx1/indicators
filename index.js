@@ -347,6 +347,13 @@ async function dispatch(interaction) {
       // they already imported is the most confusing message this panel can produce, and it was
       // produced twice.
       const onDisk = auth.hasKeyFile(t.userId);
+      // Instrumented because this refusal has now contradicted the panel in the same session, and
+      // the panel and this branch call the SAME function on the same process. Whatever the cause,
+      // the next occurrence records its own inputs rather than leaving it to be reasoned about.
+      line(`  !! ARM REFUSED for ${t.userId}: isImported=${auth.isImported(t.userId)} ` +
+        `hasKeyFile=${onDisk} userDir=${auth.USER_DIR} ` +
+        `typeofId=${typeof t.userId} idLen=${String(t.userId).length} ` +
+        `status=${JSON.stringify(auth.status(t.userId))}`);
       return interaction.reply({
         content: onDisk
           ? '❌ A key file exists for your account but it could not be decrypted — almost always ' +
