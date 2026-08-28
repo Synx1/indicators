@@ -4,9 +4,11 @@
   "description": "V5 Time-Aware Drift/Fade Kalshi paper trader",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "bot": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.0"
+    "axios": "^1.7.0",
+    "discord.js": "^14.16.3"
   }
 }

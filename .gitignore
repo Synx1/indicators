@@ -2,3 +2,17 @@ node_modules
 bot.pid
 bot.log
 state.json
+
+# ── secrets: never committed ──
+#
+# The Discord bot token and the Kalshi key-store secret. .env.local is read at boot for local
+# runs; on Railway these are service environment variables and this file does not exist.
+# Listed BEFORE either file is created, so there is no window in which a token is trackable.
+.env
+.env.local
+.env.*.local
+
+# Encrypted Kalshi credentials, if the store is ever pointed inside the repo. It should not be
+# (default is ~/.indicbot/users) but a mistaken KEY_DIR must not become a committed private key.
+keys/
+*.enc
