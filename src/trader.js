@@ -339,6 +339,22 @@ function record(t, d, fill) {
   return p;
 }
 
+/**
+ * Whether a blocked entry may still be recorded as paper.
+ *
+ * Paper exists so a decision the bot made is never lost from the record — that is why a live
+ * account that cannot trade still gets the paper fill. But ARMED means somebody is watching real
+ * money right now, and a paper position landing in that state is worse than a gap: it appears on
+ * the live panel, counts nowhere, and reads as the arm having been ignored. It was reported in
+ * those words. So armed is the one state where a blocked entry is skipped and says why.
+ *
+ * Live-but-not-armed still fills paper, because that is what the panel promises out loud when you
+ * press Go live: "signals will keep filling as paper until you press Arm".
+ */
+function paperAllowed(t) {
+  return !(t.get('live') && t.get('armed'));
+}
+
 async function applyTo(t, d) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
@@ -353,6 +369,10 @@ async function applyTo(t, d) {
   // still gets the paper record, so the decision is not lost from its history — the reason it
   // did not trade for real is in the log, not a gap in the book.
   if (!liveWanted || block) {
+    // Armed and blocked: skip it. See paperAllowed(). The reason travels with the skip so the
+    // decisions feed still explains what happened — a daily stop that stops trading silently is
+    // indistinguishable from a bot that has died.
+    if (!paperAllowed(t)) return { taken: false, why: block || 'armed — paper is off' };
     const fee = decide.fee(d.price, shares);
     const p = record(t, d, {
       contracts: shares, priceCents: d.pricePct, price: d.price,
@@ -585,6 +605,43 @@ async function checkExits() {
 
 // ── the loop ────────────────────────────────────────────────────
 
+/**
+ * How many accounts may be placing an order at the same moment.
+ *
+ * The per-account step is a network round trip plus the user's own fill grace (3s by default), so
+ * running accounts one after another adds all of that to the pass. At twenty accounts a pass would
+ * outlast the freshness of the spot price it was computed from, and a stale spot is not a slow bot
+ * — it is the bug that cost this bot 85% of its bankroll once already. Four at a time keeps a pass
+ * bounded without turning seven markets into a burst against Kalshi.
+ */
+const ACCOUNT_CONCURRENCY = 4;
+
+/**
+ * Run `fn` over `items`, at most `limit` at a time, returning results in INPUT order.
+ *
+ * Order matters even though execution does not: the pass log is read as a record of what happened
+ * to each account, and interleaving it by whichever network call answered first makes two runs of
+ * the same pass look like different events. A thrown error is captured per item rather than
+ * rejecting the whole batch — one account's failure must never cost another account its entry.
+ */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(limit, items.length)) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        try { out[i] = { ok: true, value: await fn(items[i], i) }; }
+        catch (e) { out[i] = { ok: false, error: e }; }
+      }
+    }
+  );
+  await Promise.all(workers);
+  return out;
+}
+
 async function runOnce() {
   stats.passes++;
   const accounts = users.all();
@@ -620,34 +677,35 @@ async function runOnce() {
     log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
       `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.style}`);
 
-    for (const t of accounts) {
-      try {
-        const r = await applyTo(t, d);
-        if (r.taken) {
-          stats.entries++;
-          log(`    ${t.rec.tag || t.userId}: ${r.live ? 'LIVE' : 'paper'} ` +
-            `${r.position.contracts}× @${r.position.priceCents}c` +
-            (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''));
-          activity.push({
-            sym: coin.sym, kind: 'EXIT', reason: r.live ? 'filled-live' : 'filled-paper',
-            detail: `${t.rec.tag || t.userId} — ${r.live ? 'LIVE' : 'paper'} ` +
-              `${r.position.contracts}× @${r.position.priceCents}¢, cost ` +
-              `${users.money(r.position.cost)}` +
-              (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''),
-            meta: { who: t.rec.tag || t.userId, live: r.live, seq: r.position.seq }
-          });
-        } else {
-          log(`    ${t.rec.tag || t.userId}: skipped — ${r.why}`);
-          activity.push({
-            sym: coin.sym, kind: 'SKIP', reason: 'account',
-            detail: `${t.rec.tag || t.userId} — ${r.why}`,
-            meta: { who: t.rec.tag || t.userId }
-          });
-        }
-      } catch (e) {
-        log(`    ${t.rec.tag || t.userId}: failed — ${e.message}`);
+    // Every account decides on the SAME decision object, concurrently but bounded. See mapLimit().
+    const results = await mapLimit(accounts, ACCOUNT_CONCURRENCY, t => applyTo(t, d));
+    results.forEach((res, i) => {
+      const t = accounts[i];
+      const who = t.rec.tag || t.userId;
+      if (!res.ok) { log(`    ${who}: failed — ${res.error.message}`); return; }
+      const r = res.value;
+      if (r.taken) {
+        stats.entries++;
+        log(`    ${who}: ${r.live ? 'LIVE' : 'paper'} ` +
+          `${r.position.contracts}× @${r.position.priceCents}c` +
+          (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''));
+        activity.push({
+          sym: coin.sym, kind: 'EXIT', reason: r.live ? 'filled-live' : 'filled-paper',
+          detail: `${who} — ${r.live ? 'LIVE' : 'paper'} ` +
+            `${r.position.contracts}× @${r.position.priceCents}¢, cost ` +
+            `${users.money(r.position.cost)}` +
+            (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''),
+          meta: { who, live: r.live, seq: r.position.seq }
+        });
+      } else {
+        log(`    ${who}: skipped — ${r.why}`);
+        activity.push({
+          sym: coin.sym, kind: 'SKIP', reason: 'account',
+          detail: `${who} — ${r.why}`,
+          meta: { who }
+        });
       }
-    }
+    });
     // Spaced so seven markets do not arrive at Kalshi as a burst.
     await new Promise(r => setTimeout(r, 300));
   }
@@ -675,7 +733,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
-  sharesFor, liveOrPaperBalance,
+  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,

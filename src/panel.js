@@ -35,6 +35,7 @@ const book = require('./book');
 const gl = require('./markets');
 const auth = require('./kalshiauth');
 const kt = require('./kalshitrade');
+const advice = require('./advice');
 
 const NAME = 'Indicators';
 const VERSION = 'v0.1';
@@ -211,10 +212,28 @@ async function mainPayload(t) {
   const keyed = auth.isImported(t.userId);
   const keyFile = auth.hasKeyFile(t.userId);
   const live = t.get('live');
+  const armed = t.get('armed') === true;
   const b = t.rec.book;
   const open = book.openPositions(b);
-  const all = book.stats(b, { liveOnly: live ? true : false });
-  const today = book.todayStats(b);
+  // ── the two books, computed side by side and never pooled ──
+  //
+  // Today used to come from the WHOLE book while All time came from the live half, so a panel
+  // could show `Today +$82.98 / 10 closed` above `All time +$0.00 / 0 closed` and read as a
+  // contradiction. They were two different measurements wearing one label. Both are computed here,
+  // each internally consistent, and the active one drives the headline.
+  const paperBaseline = t.get('paperResetAt');
+  const liveSt = book.stats(b, { liveOnly: true });
+  const paperSt = book.stats(b, {
+    liveOnly: false,
+    sinceMs: paperBaseline == null ? null : Number(paperBaseline)
+  });
+  const liveEq = book.equity(b, { start: Number(t.get('liveBankroll')) || 0, liveOnly: true });
+  const paperEq = book.equity(b, {
+    start: Number(t.get('paperBankroll')) || 0,
+    liveOnly: false,
+    sinceMs: paperBaseline == null ? null : Number(paperBaseline)
+  });
+  const all = live ? liveSt : paperSt;
 
   // ── the bankroll is a LIVE figure, not the setting ──
   //
@@ -224,13 +243,9 @@ async function mainPayload(t) {
   //
   // Live is capped by the real Kalshi balance, because you cannot allocate money you do not hold;
   // paper walks its own curve from the configured start.
-  const startBal = live ? t.get('liveBankroll') : t.get('paperBankroll');
-  const baseline = t.get('paperResetAt');
-  const eq = book.equity(b, {
-    start: Number(startBal) || 0,
-    liveOnly: live ? true : false,
-    sinceMs: live ? null : (baseline == null ? null : Number(baseline))
-  });
+  // The active mode's curve is the headline. Both were already computed above, so the two cannot
+  // be derived from different inputs.
+  const eq = live ? liveEq : paperEq;
   const ceiling = live && bal.dollars != null ? bal.dollars : null;
   const shown = live
     ? (ceiling == null ? eq.equity : Math.min(eq.equity, ceiling))
@@ -256,42 +271,80 @@ async function mainPayload(t) {
     inline: false
   });
 
-  // ── performance: the three numbers that were missing ──
+  // ── performance: live and paper, side by side, never pooled ──
   //
-  // `net` says where it ended. Only walking the curve gives the best it ever had and how far back
-  // it has come — a book at +$5 having been +$60 is a different situation from one that climbed
-  // steadily to +$5, and the totals report them identically.
-  e.addFields({
-    name: 'Performance',
+  // `net` says where a book ended. Only walking the curve gives the best it ever had and how far
+  // back it has come — a book at +$5 having been +$60 is a different situation from one that
+  // climbed steadily to +$5, and the totals report them identically. The day's high therefore sits
+  // beside the day's P&L rather than instead of it.
+  //
+  // Two blocks because there are two books. Today used to be read off the WHOLE book while All
+  // time was read off the live half, so one panel showed `Today +$82.98 / 10 closed` directly
+  // above `All time +$0.00 / 0 closed`. Neither number was wrong; the label was.
+  const perfField = (label, active, st, curve) => {
+    const name = label + (active ? '   ← this account' : '');
+    // Four rows of $0.00 is not a report, it is furniture. Before the first close, the block says
+    // the one true thing about that book: where it starts.
+    if (!st.n) {
+      return {
+        name,
+        value: `_nothing closed yet — this book starts at ${money(curve.start)}_`,
+        inline: false
+      };
+    }
+    return {
+    name,
     value: table([
       // Both lines in the SAME shape. They read as a comparison, so describing one with W/L and
       // the other with a percentage made them look like they disagreed when they never did.
-      ['Today', `${signed(today.net)}   ${today.n} closed` +
-        (today.n ? `  ·  ${today.wins}W/${today.losses}L  ·  ${pct(today.wins / today.n)}` : '')],
-      ['All time', `${signed(all.net)}   ${all.n} closed` +
-        (all.n ? `  ·  ${all.wins}W/${all.losses}L  ·  ${pct(all.hit)}` : '')],
-      ['Peak equity', money(eq.peak) +
-        (eq.fromPeak > 0.005 ? `   ${signed(-eq.fromPeak)} from peak` : '   ← at a new high')],
-      eq.maxDrawdown > 0.005 && ['Worst drop', `${signed(-eq.maxDrawdown)} peak to trough`],
-      all.n > 0 && ['Fees paid', money(all.fees)]
-    ]) + (all.n >= 3 && all.hit != null
+      ['Today', `${signed(curve.todayNet)}   ${curve.todayN} closed`],
+      ['All time', `${signed(st.net)}   ${st.n} closed` +
+        (st.n ? `  ·  ${st.wins}W/${st.losses}L  ·  ${pct(st.hit)}` : '')],
+      ['Day high', money(curve.todayPeak) +
+        (curve.todayPeak - curve.equity > 0.005
+          ? `   ${signed(-(curve.todayPeak - curve.equity))} from today's high`
+          : "   ← at today's high")],
+      ['All-time high', money(curve.peak) +
+        (curve.fromPeak > 0.005 ? `   ${signed(-curve.fromPeak)} from peak` : '   ← at a new high')],
+      curve.maxDrawdown > 0.005 && ['Worst drop', `${signed(-curve.maxDrawdown)} peak to trough`],
+      st.n > 0 && ['Fees paid', money(st.fees)]
+    ]) + (active && st.n >= 3 && st.hit != null
       // Win rate is the one figure here with a denominator that cannot be exceeded, so it is the
       // one a bar can honestly draw. Below three trades it would be drawing noise.
       //
       // Labelled "2 of 3 won" and not "66.7% of 3 won": the latter parses as "66.7%, of which 3
       // won", which is how a correct 2W/1L book got read as three wins.
-      ? `${bar(all.hit)}  ${all.wins} of ${all.n} won\n` : ''),
+      ? `\n${bar(st.hit)}  ${st.wins} of ${st.n} won` : ''),
     inline: false
-  });
+    };
+  };
+  e.addFields(perfField('Live  ·  real money', live === true, liveSt, liveEq));
+  e.addFields(perfField('Paper', live !== true, paperSt, paperEq));
 
+  // ── open: the money actually at stake, and nothing else ──
+  //
+  // While ARMED this lists live positions only. It used to list the whole book, so a screenshot
+  // showed `Open · 2 · $0.00 at risk` above two paper positions — the count came from the book and
+  // the risk from the live half, and the reader is left to work out that the two rows are
+  // imaginary. Paper positions opened before arming are still managed and settled; they are
+  // reported as a footnote and counted in the paper book, not shown as exposure here.
+  const liveView = live && armed;
+  const shownOpen = liveView ? open.filter(p => p.live) : open;
+  const paperOpenN = liveView ? open.length - shownOpen.length : 0;
+  const settling = paperOpenN
+    ? `\n_${paperOpenN} paper position${paperOpenN === 1 ? '' : 's'} from before you armed ` +
+      'is still settling — it counts towards the paper book above, not towards this. See Trades._'
+    : '';
   e.addFields({
-    name: open.length ? `Open  ·  ${open.length}  ·  ${money(eq.atRisk)} at risk` : 'Open  ·  0',
-    value: open.length
-      ? table(open.slice(0, 6).map(p => [
+    name: shownOpen.length
+      ? `Open  ·  ${shownOpen.length}  ·  ${money(eq.atRisk)} at risk`
+      : 'Open  ·  0',
+    value: (shownOpen.length
+      ? table(shownOpen.slice(0, 6).map(p => [
         `${p.sym} ${p.direction === 'UP' ? '▲' : '▼'}`,
         `${p.contracts}× @${p.priceCents}¢   ${money(p.cost)}   closes ${String(p.closeTime).slice(11, 16)}`
-      ])) + (open.length > 6 ? `…and ${open.length - 6} more` : '')
-      : '_nothing open — it enters when a market clears every gate_',
+      ])) + (shownOpen.length > 6 ? `…and ${shownOpen.length - 6} more` : '')
+      : '_nothing open — it enters when a market clears every gate_') + settling,
     inline: false
   });
 
@@ -388,7 +441,9 @@ async function mainPayload(t) {
       value: table([
         ['Key ID', String(st2.keyId || auth.maskedKeyId(t.userId) || '—')],
         ['Imported', st2.importedAt ? new Date(st2.importedAt).toLocaleString() : '—'],
-        ['Stored', `${KEY_DIR_SOURCE}${KEY_DIR_PERSISTENT ? '' : '  — REBUILT EVERY DEPLOY'}`],
+        // Only shown when it is a WARNING. A row reporting that persistence is working is noise on
+        // every render, and the reason it existed was the deploy that lost a key.
+        !KEY_DIR_PERSISTENT && ['Stored', `${KEY_DIR_SOURCE}  — REBUILT EVERY DEPLOY`],
         ['Linked to', t.rec.tag ? `${t.rec.tag}  (${t.userId})` : t.userId],
         ['Balance', bal.dollars == null ? `— ${bal.why || 'not read yet'}`
           : dust ? `${money(exact)}  — under a cent, so this account is effectively empty`
@@ -557,23 +612,53 @@ function tradesPayload(t) {
  */
 function adminPayload() {
   const all = users.all();
-  const rows = all.map(t => {
-    const st = book.stats(t.rec.book);
-    const today = book.todayStats(t.rec.book);
-    const open = book.openPositions(t.rec.book).length;
-    const live = t.get('live'), armed = t.get('armed');
+  // One snapshot per account, in the shape src/advice.js takes. Built here because this file is
+  // the one that knows where a book and a key live; advice.js stays pure arithmetic over it.
+  const snaps = all.map(t => {
+    const b = t.rec.book;
+    const opens = book.openPositions(b);
+    const liveSt = book.stats(b, { liveOnly: true });
+    const paperSt = book.stats(b, { liveOnly: false });
+    const liveEq = book.equity(b, { start: Number(t.get('liveBankroll')) || 0, liveOnly: true });
     return {
+      t,
       who: (t.rec.tag || t.userId).slice(0, 16),
-      state: gl.isKilled() ? 'halted' : !live ? 'paper' : armed ? 'ARMED' : 'live',
-      n: st.n, net: st.net, today: today.net, open,
-      atRisk: book.atRisk(t.rec.book),
-      hit: st.hit
+      userId: t.userId,
+      live: t.get('live') === true,
+      armed: t.get('armed') === true,
+      keyed: auth.isImported(t.userId),
+      keyFile: auth.hasKeyFile(t.userId),
+      balance: t.rec.balance == null ? null : Number(t.rec.balance),
+      shares: resolvedShares(t) || 0,
+      dailyStop: t.get('dailyStopLoss'),
+      todayRealised: t.day().realised,
+      paperOpen: opens.filter(p => !p.live).length,
+      liveOpen: opens.filter(p => p.live).length,
+      atRiskLive: book.atRisk(b, { liveOnly: true }),
+      liveNet: liveSt.net, paperNet: paperSt.net,
+      liveN: liveSt.n, paperN: paperSt.n,
+      liveToday: liveEq.todayNet,
+      state: gl.isKilled() ? 'halted' : !t.get('live') ? 'paper' : t.get('armed') ? 'ARMED' : 'live'
     };
-  }).sort((a, b) => b.net - a.net);
+  });
 
-  const fleetNet = rows.reduce((a, r) => a + r.net, 0);
-  const fleetToday = rows.reduce((a, r) => a + r.today, 0);
-  const fleetRisk = rows.reduce((a, r) => a + r.atRisk, 0);
+  // Aggregated across every account, because one person's twelve trades on SOL is not evidence
+  // about SOL. Live and paper pooled deliberately here: the question is whether the SIGNAL on that
+  // market makes money, and both books answer it.
+  const markets = {};
+  for (const s2 of snaps) {
+    for (const m of book.byMarket(s2.t.rec.book)) {
+      const g = markets[m.sym] || (markets[m.sym] = { sym: m.sym, n: 0, net: 0 });
+      g.n += m.n;
+      g.net = +(g.net + m.net).toFixed(2);
+    }
+  }
+  const findings = advice.review(snaps, { markets: Object.values(markets) });
+
+  const rows = snaps.slice().sort((a, b) => (b.liveNet + b.paperNet) - (a.liveNet + a.paperNet));
+  const fleetLive = +rows.reduce((a, r) => a + r.liveNet, 0).toFixed(2);
+  const fleetPaper = +rows.reduce((a, r) => a + r.paperNet, 0).toFixed(2);
+  const fleetRisk = +rows.reduce((a, r) => a + r.atRiskLive, 0).toFixed(2);
   const armedN = rows.filter(r => r.state === 'ARMED').length;
 
   const e = new EmbedBuilder()
@@ -581,24 +666,50 @@ function adminPayload() {
     .setAuthor({ name: `${NAME} ${VERSION} · owner` })
     .setTitle(gl.isKilled() ? 'Halted — kill switch on' : `${all.length} account(s), ${armedN} armed`);
 
+  // ── what to look at, before what happened ──
+  //
+  // Findings first on purpose. Every one of these was previously found by a person reading the
+  // numbers below and doing the arithmetic in their head, hours late — a size that was 96% of an
+  // account, a stop larger than the balance it protected, a key that had stopped decrypting.
+  if (findings.length) {
+    const mark = { high: '🔴', warn: '🟡', note: '·' };
+    e.addFields({
+      name: `Worth looking at  ·  ${findings.length}`,
+      value: findings.slice(0, 6).map(f =>
+        `${mark[f.severity]} **${f.who}** — ${f.text}` + (f.fix ? `\n   ↳ _${f.fix}_` : '')
+      ).join('\n') + (findings.length > 6 ? `\n_…and ${findings.length - 6} more_` : ''),
+      inline: false
+    });
+  } else if (all.length) {
+    e.addFields({
+      name: 'Worth looking at  ·  0',
+      value: '_Nothing. Sizes fit their balances, stops can trip, keys decrypt, and no market is ' +
+        'losing money over a meaningful sample._',
+      inline: false
+    });
+  }
+
   e.addFields({
     name: 'Fleet',
     value: table([
-      ['Today', signed(fleetToday)],
-      ['All time', signed(fleetNet)],
-      ['At risk now', money(fleetRisk)],
+      ['Live', `${signed(fleetLive)}   real money`],
+      ['Paper', signed(fleetPaper)],
+      ['At risk now', `${money(fleetRisk)}   live only`],
       ['Markets on', `${gl.enabledSyms().length}/${gl.SYMS.length}`]
     ]),
     inline: false
   });
 
+  // Live and paper in separate columns rather than one pooled figure: pooling them produces a
+  // number that describes neither book, and lets a good paper run hide a bad live one.
   e.addFields({
     name: 'Accounts',
     value: rows.length
       ? table(rows.map(r => [
         r.who,
-        `${r.state.padEnd(6)} ${String(r.n).padStart(4)}T ${signed(r.net).padStart(9)}` +
-        `  today ${signed(r.today).padStart(8)}${r.open ? `  ${r.open} open` : ''}`
+        `${r.state.padEnd(6)} live ${signed(r.liveNet).padStart(8)}/${String(r.liveN).padStart(3)}T` +
+        `  paper ${signed(r.paperNet).padStart(9)}/${String(r.paperN).padStart(4)}T` +
+        (r.liveOpen ? `  ${r.liveOpen} open` : '')
       ]))
       : '_no accounts yet_',
     inline: false
@@ -606,7 +717,11 @@ function adminPayload() {
 
   e.addFields({
     name: 'Markets',
-    value: table(gl.SYMS.map(sym => [sym, gl.isEnabled(sym) ? '● on' : '○ off'])),
+    value: table(gl.SYMS.map(sym => {
+      const g = markets[sym];
+      return [sym, `${gl.isEnabled(sym) ? '● on ' : '○ off'}` +
+        (g && g.n ? `   ${signed(g.net).padStart(9)} over ${g.n}T` : '')];
+    })),
     inline: false
   });
 

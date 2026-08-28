@@ -36,6 +36,17 @@
  */
 const sideLabel = side => (String(side).toUpperCase() === 'YES' ? 'UP' : 'DOWN');
 
+/**
+ * The exchange's calendar date for an instant.
+ *
+ * Every "today" in this file means the trading day in New York, not the viewer's day. Shared by
+ * the daily stop, todayStats() and the daily high-water mark so the three cannot disagree about
+ * when a day ends.
+ */
+function etDay(at) {
+  return new Date(at).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
 /** A fresh book. */
 function blank() {
   return {
@@ -331,11 +342,10 @@ function stats(book, { liveOnly = null, sinceMs = null } = {}) {
  * today's loss.
  */
 function todayStats(book, day) {
-  const target = day || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const target = day || etDay(new Date());
   const closed = closedPositions(book).filter(p => {
     if (!p.exitAt) return false;
-    return new Date(p.exitAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
-      === target;
+    return etDay(p.exitAt) === target;
   });
   const net = +closed.reduce((a, p) => a + (Number(p.pnl) || 0), 0).toFixed(2);
   const wins = closed.filter(p => (Number(p.pnl) || 0) > 0).length;
@@ -388,7 +398,7 @@ function byMarket(book, { liveOnly = null } = {}) {
  * `sinceMs` scopes the realised P&L to trades that closed at or after a baseline, which is what
  * makes "set my paper balance to X" mean X now rather than X plus a lifetime of history.
  */
-function equity(book, { start = 0, liveOnly = null, sinceMs = null } = {}) {
+function equity(book, { start = 0, liveOnly = null, sinceMs = null, day = null } = {}) {
   let closed = closedPositions(book);
   if (liveOnly === true) closed = closed.filter(p => p.live);
   if (liveOnly === false) closed = closed.filter(p => !p.live);
@@ -405,14 +415,32 @@ function equity(book, { start = 0, liveOnly = null, sinceMs = null } = {}) {
   let trough = base;
   let maxDd = 0;
   const points = [base];
+  // ── the day's high-water mark ──
+  //
+  // Tracked on this same pass because it cannot be derived from the totals: a book at +$5 today
+  // having been +$60 this morning is a different day from one that climbed to +$5, and `net`
+  // reports them identically. `todayStart` is where the curve stood when the day opened — not
+  // `start`, which is where the whole book opened.
+  const target = day || etDay(new Date());
+  let todayStart = null;
+  let todayPeak = null;
+  let todayN = 0;
   for (const p of closed) {
+    const onDay = p.exitAt ? etDay(p.exitAt) === target : false;
+    // Taken BEFORE this position's P&L is applied, so the opening figure excludes today's first
+    // result rather than including it.
+    if (onDay && todayStart === null) { todayStart = run; todayPeak = run; }
     run += Number(p.pnl) || 0;
     points.push(+run.toFixed(4));
     if (run > peak) peak = run;
     if (run < trough) trough = run;
     const dd = peak - run;
     if (dd > maxDd) maxDd = dd;
+    if (onDay) { todayN++; if (run > todayPeak) todayPeak = run; }
   }
+  // A day that closed nothing has not made, lost, or peaked at anything: it stands where the
+  // curve already was. Reporting the all-time peak here would claim a high the day never had.
+  if (todayStart === null) { todayStart = run; todayPeak = run; }
 
   const opens = openPositions(book).filter(p => (liveOnly == null ? true : (liveOnly ? p.live : !p.live)));
   const atRisk = +opens.reduce((a, p) => a + (Number(p.cost) || 0), 0).toFixed(2);
@@ -431,6 +459,15 @@ function equity(book, { start = 0, liveOnly = null, sinceMs = null } = {}) {
     fromPeak: +(peak - run).toFixed(2),
     /** The deepest peak-to-trough the curve actually took, which `net` cannot show. */
     maxDrawdown: +maxDd.toFixed(2),
+    // ── today, in the exchange's calendar ──
+    day: target,
+    /** Where the curve stood when this trading day opened. */
+    todayStart: +todayStart.toFixed(2),
+    /** The best it has been TODAY. Equal to todayStart on a day that has closed nothing. */
+    todayPeak: +todayPeak.toFixed(2),
+    /** Realised today, which is the day's movement rather than the book's total. */
+    todayNet: +(run - todayStart).toFixed(2),
+    todayN,
     atRisk,
     n: closed.length,
     points

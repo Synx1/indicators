@@ -38,12 +38,44 @@ function publicState() {
 
   const all = users.all();
   let closed = 0, wins = 0, net = 0, open = 0, atRisk = 0, fees = 0;
+  // Live and paper are accumulated apart as well as together. Pooling them produces a figure that
+  // describes neither book and lets a good paper run hide a bad live one — which is exactly the
+  // comparison this bot exists to make. `dayHigh` is the best each book has been TODAY, which no
+  // total can reconstruct: a book at +$5 that was +$60 this morning is a different day.
+  const side = mode => ({ closed: 0, wins: 0, net: 0, open: 0, atRisk: 0, today: 0, dayHigh: 0, mode });
+  const live = side('live');
+  const paper = side('paper');
   for (const t of all) {
-    const s = book.stats(t.rec.book);
+    const b = t.rec.book;
+    const s = book.stats(b);
     closed += s.n; wins += s.wins; net += s.net; fees += s.fees;
-    open += book.openPositions(t.rec.book).length;
-    atRisk += book.atRisk(t.rec.book);
+    open += book.openPositions(b).length;
+    atRisk += book.atRisk(b);
+
+    const baseline = t.get('paperResetAt');
+    const pairs = [
+      [live, book.stats(b, { liveOnly: true }),
+        book.equity(b, { start: Number(t.get('liveBankroll')) || 0, liveOnly: true })],
+      [paper, book.stats(b, { liveOnly: false, sinceMs: baseline == null ? null : Number(baseline) }),
+        book.equity(b, {
+          start: Number(t.get('paperBankroll')) || 0, liveOnly: false,
+          sinceMs: baseline == null ? null : Number(baseline)
+        })]
+    ];
+    for (const [acc, st, curve] of pairs) {
+      acc.closed += st.n; acc.wins += st.wins; acc.net += st.net;
+      acc.open += st.open; acc.atRisk += st.atRisk;
+      acc.today += curve.todayNet;
+      acc.dayHigh += curve.todayPeak;
+    }
   }
+  const round = a => ({
+    ...a,
+    losses: a.closed - a.wins,
+    hit: a.closed ? a.wins / a.closed : null,
+    net: +a.net.toFixed(2), today: +a.today.toFixed(2),
+    dayHigh: +a.dayHigh.toFixed(2), atRisk: +a.atRisk.toFixed(2)
+  });
   const lastPass = trader && trader.lastPass ? new Date(trader.lastPass).getTime() : null;
   return {
     asOf: Date.now(),
@@ -66,6 +98,10 @@ function publicState() {
       net: +net.toFixed(2), fees: +fees.toFixed(2),
       open, atRisk: +atRisk.toFixed(2)
     },
+    // Per book, because "how is it doing" has two answers and only one of them is real money.
+    // dayHigh is summed across accounts: a fleet high-water mark, not any one account's.
+    live: round(live),
+    paper: round(paper),
     // The key store is reported alongside the book because it is the half that was silently
     // ephemeral. `keys` is a SOURCE and a boolean, never a path with a credential in it.
     storage: {
@@ -94,21 +130,35 @@ function accounts() {
     accounts: users.all().map(t => {
       const b = t.rec.book;
       const live = t.get('live');
-      const eq = book.equity(b, {
-        start: Number(live ? t.get('liveBankroll') : t.get('paperBankroll')) || 0,
-        liveOnly: live ? true : false
-      });
-      const s = book.stats(b);
-      const today = book.todayStats(b);
+      const baseline = t.get('paperResetAt');
+      // Each book measured against ITS OWN start, and reported under its own name. The row used to
+      // carry a mode-scoped equity beside a whole-book trade count, so a live account with no live
+      // trades read as "0 realised, 11 closed" — two true numbers making one false impression.
+      const per = (liveOnly, start, sinceMs) => {
+        const curve = book.equity(b, { start: Number(start) || 0, liveOnly, sinceMs });
+        const st = book.stats(b, { liveOnly, sinceMs });
+        return {
+          equity: curve.equity, start: curve.start, realised: curve.realised,
+          peak: curve.peak, fromPeak: curve.fromPeak, maxDrawdown: curve.maxDrawdown,
+          // Kept as an OBJECT because the served page reads today.net; the day's high joins it
+          // rather than becoming a sibling key, so there is one place to look for "today".
+          today: { net: curve.todayNet, n: curve.todayN, high: curve.todayPeak },
+          atRisk: curve.atRisk, open: st.open,
+          closed: st.n, wins: st.wins, losses: st.losses, hit: st.hit, fees: st.fees
+        };
+      };
+      const liveSide = per(true, t.get('liveBankroll'), null);
+      const paperSide = per(false, t.get('paperBankroll'),
+        baseline == null ? null : Number(baseline));
+      const active = live ? liveSide : paperSide;
       return {
         who: t.rec.tag || t.userId,
         live, armed: t.get('armed') === true,
         shares: t.get('shares'),
-        equity: eq.equity, start: eq.start, realised: eq.realised,
-        peak: eq.peak, fromPeak: eq.fromPeak, maxDrawdown: eq.maxDrawdown,
-        atRisk: eq.atRisk, open: book.openPositions(b).length,
-        closed: s.n, wins: s.wins, losses: s.n - s.wins, hit: s.hit, fees: s.fees,
-        today: { net: today.net, n: today.n, wins: today.wins },
+        // The active book, kept at the top level so existing readers of this endpoint still work.
+        ...active,
+        live_book: liveSide,
+        paper_book: paperSide,
         days: book.byDay(b).slice(-30)
       };
     }).sort((a, b) => b.realised - a.realised)

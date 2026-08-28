@@ -160,8 +160,19 @@ $('tabs').addEventListener('click', e => {
 
 function heroCells(d) {
   const f = d.fleet, sc = d.scanner;
+  // Live first and on its own, because it is the only row that is real money. A single pooled
+  // "Net" let a good paper run stand in for a live book that had never traded — the same mislabel
+  // the Discord panel had, where today's paper figure sat above an all-time live one.
+  const lv = d.live || { net: 0, closed: 0, today: 0, dayHigh: 0 };
+  const pp = d.paper || { net: 0, closed: 0, today: 0, dayHigh: 0 };
   return [
-    ['Net', signed(f.net), cls(f.net), f.closed + ' closed'],
+    ['Live P&L', signed(lv.net), cls(lv.net),
+      lv.closed ? lv.closed + ' closed · today ' + signed(lv.today) : 'no live trades yet'],
+    ['Live day high', money(lv.dayHigh), 'dim',
+      lv.today || lv.closed ? 'best equity today' : 'nothing closed today'],
+    ['Paper P&L', signed(pp.net), cls(pp.net),
+      pp.closed ? pp.closed + ' closed · today ' + signed(pp.today) : 'no paper trades yet'],
+    ['Paper day high', money(pp.dayHigh), 'dim', 'best equity today'],
     ['Win rate', f.closed ? pct(f.hit) : '—', '', f.closed ? f.wins + 'W / ' + f.losses + 'L' : 'no trades yet'],
     ['Open', String(f.open), '', f.atRisk ? money(f.atRisk) + ' at risk' : 'nothing at risk'],
     ['Fees', money(f.fees), 'dim', 'paid to Kalshi'],

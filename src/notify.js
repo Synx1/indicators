@@ -30,23 +30,64 @@ const readOf = style => (style === 'DIP' ? 'bought a dip' : 'chased a move');
 
 let dm = async () => false;
 let log = () => {};
+/**
+ * The minimum gap between two DMs, and the depth beyond which they are dropped.
+ *
+ * One account filling on seven markets is seven DMs; twenty accounts is a hundred and forty, all
+ * inside one scan pass. Discord answers a burst like that with 429s, and discord.js handles those
+ * by WAITING — which would land the delay inside the trading loop that is awaiting the send. So
+ * the sends are spaced here instead, where a delay costs nothing.
+ */
+let gapMs = 250;
+const MAX_QUEUED = 200;
+let chain = Promise.resolve();
+let queued = 0;
+
 function init(opts = {}) {
   dm = opts.dm || dm;
   log = opts.log || log;
+  if (opts.gapMs != null) gapMs = Number(opts.gapMs);
   return true;
 }
 
+const gap = () => new Promise(r => setTimeout(r, gapMs));
+
+/** The actual delivery, which never throws — see send(). */
+async function deliver(userId, payload) {
+  try { return await dm(userId, payload); }
+  catch (e) { log(`  dm to ${userId} failed: ${e.message}`); return false; }
+}
+
 /**
- * Send, and never let a delivery problem reach the caller.
+ * Queue a DM, and never let a delivery problem reach the caller.
  *
  * A user with DMs closed reports 50007, which is permanent rather than transient, so it is not
  * retried. Losing a notification must never cost a trade or a settlement: this is the last thing
  * in every path for exactly that reason.
+ *
+ * It does not WAIT for delivery either, and that is the same rule one step further. The trader
+ * awaits this call from inside a scan pass; if the await also covered the queue's spacing, then at
+ * twenty accounts a pass would be held open for seconds by messages nobody is reading yet — and a
+ * pass that runs long is a pass whose spot price has gone stale, which is the one failure this bot
+ * cannot afford. So the send is enqueued, ordered, and reported here rather than there.
  */
-async function send(userId, payload) {
-  try { return await dm(userId, payload); }
-  catch (e) { log(`  dm to ${userId} failed: ${e.message}`); return false; }
+function send(userId, payload) {
+  if (queued >= MAX_QUEUED) {
+    log(`  !! dm queue is ${queued} deep — dropped a notification for ${userId}`);
+    return false;
+  }
+  queued++;
+  chain = chain
+    .then(() => deliver(userId, payload))
+    .then(() => { queued--; return gap(); }, () => { queued--; return gap(); });
+  return true;
 }
+
+/** How many DMs are waiting. Exposed so the panel can say so rather than appearing to have stalled. */
+function pending() { return queued; }
+
+/** Resolves once every queued DM has been attempted. For tests and for a clean shutdown. */
+function drain() { return chain; }
 
 function base(colour, title, sub) {
   const e = new EmbedBuilder().setColor(colour).setTitle(title);
@@ -180,4 +221,7 @@ async function forcedDisarm(userId) {
   return send(userId, { embeds: [e] });
 }
 
-module.exports = { init, forcedDisarm, entry, missedFill, cashout, settled, awaitingSettlement, readOf };
+module.exports = {
+  init, forcedDisarm, entry, missedFill, cashout, settled, awaitingSettlement, readOf,
+  pending, drain
+};
