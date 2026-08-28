@@ -103,6 +103,28 @@ function forAccount(a) {
     }
   }
 
+  // ── collateral on the wrong exchange shard ──
+  //
+  // Kalshi holds cash per exchange shard and the matching engine checks an order against the shard
+  // its market lives on: crypto is shard 2. An account with $24.88 on shard 0 and 2c on shard 2 has
+  // a healthy-looking balance and cannot buy a single contract — it produces a bare
+  // "400 insufficient balance" on every signal, which reads as a bot fault rather than a funding
+  // one. This is the finding that would have saved an evening.
+  if (a.live && a.balanceShards && a.cryptoShard != null) {
+    const here = Number(a.balanceShards[String(a.cryptoShard)]) || 0;
+    const total = Object.values(a.balanceShards).reduce((x, v) => x + (Number(v) || 0), 0);
+    const elsewhere = +(total - here).toFixed(2);
+    if (elsewhere > 1 && here < shares * BAND_LO) {
+      add('high', 'wrong-shard',
+        `${money(here)} of a ${money(total)} balance is on exchange shard ${a.cryptoShard}, which ` +
+        'is where the 15-minute crypto markets trade. Kalshi checks each order against that ' +
+        `shard's cash, so ${money(elsewhere)} sitting elsewhere cannot back a single contract.`,
+        `Transfer ${money(elsewhere)} to shard ${a.cryptoShard} — POST ` +
+        '/portfolio/intra_exchange_instance_transfer, or the exchange-indexes page in the Kalshi ' +
+        'app. A target balance allocation makes Kalshi rebalance it automatically.');
+    }
+  }
+
   // ── the daily stop ──
   const stop = a.dailyStop == null ? null : Math.abs(Number(a.dailyStop));
   if (stop != null && bal != null && stop >= bal * STOP_SHARE) {

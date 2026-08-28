@@ -82,6 +82,27 @@ allows(tenant({}, [held(true, { closeTime: CLOSE, side: 'NO' })], 24.9),
   dec({ closeTime: CLOSE, side: 'YES' }),
   'the OPPOSITE direction in the same window still hedges and is still allowed');
 
+// ── the free-cash check measures the SHARD, not the account ──
+// Kalshi holds cash per exchange shard and checks the order against the shard the market lives on.
+// $24 on shard 0 with 2c on the crypto shard is a $24 balance that cannot buy one contract, which
+// is the "400 insufficient balance" the account hit once the shard record existed.
+const withShards = (shards, over = {}) => {
+  const t = tenant(over, [], 24.2);
+  t.rec.balanceShards = shards;
+  return t;
+};
+const cryptoDec = { ...dec(), exchangeIndex: 2 };
+blocks(withShards({ '0': 24.17, '2': 0.02 }), cryptoDec, /only \$0\.02 of it is on exchange shard 2/,
+  'the money is on the wrong shard, and the refusal says so');
+allows(withShards({ '0': 4.17, '2': 20.0 }), cryptoDec,
+  'funded on the shard that matters, so it trades');
+blocks(withShards({ '0': 24.17, '2': 0.02 }), cryptoDec, /Your balance is \$24\.20/,
+  'and it still reports the account total, so the number is not a mystery');
+allows(withShards(null), cryptoDec,
+  'with no breakdown read yet it falls back to the total — a cold cache must not refuse everything');
+allows(withShards({ '0': 24.17, '2': 0.02 }), { ...dec(), exchangeIndex: null },
+  'and a market with no shard reported is judged on the total, as before');
+
 // ── guards that must not have moved ──
 blocks(tenant({}, [], 1.0), dec(), /only \$0\.30 is free|but only/,
   'the free-cash refusal still fires and still shows its arithmetic');

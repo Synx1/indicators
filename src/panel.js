@@ -96,6 +96,14 @@ function scannerLine() {
 const BAND_LO = 0.25;
 const BAND_HI = 0.80;
 /**
+ * The exchange shard the 15-minute crypto markets live on.
+ *
+ * Kalshi splits matching across shards and holds cash per shard: 0 is the fallback, 1 exotics,
+ * 2 crypto, 3 tennis/baseball. Every market this bot trades is crypto, so this is the only shard
+ * whose cash can back one of its orders — a balance parked on shard 0 is unspendable here.
+ */
+const CRYPTO_SHARD = 2;
+/**
  * Above this share of the balance in ONE position, say something even though it fits.
  *
  * 50% because a binary loses the entire stake: two consecutive losses at half the account is the
@@ -161,7 +169,10 @@ async function balanceFor(t) {
   const rec = t.rec;
   const fresh = rec.balanceAt && (Date.now() - new Date(rec.balanceAt).getTime()) < BAL_TTL_MS;
   if (fresh && rec.balance != null) {
-    return { dollars: rec.balance, exact: rec.balanceExact, cached: true };
+    return {
+      dollars: rec.balance, exact: rec.balanceExact, cached: true,
+      shards: rec.balanceShards || null
+    };
   }
   if (!auth.isImported(t.userId)) return { dollars: null, cached: false, why: 'no key imported' };
   try {
@@ -171,8 +182,22 @@ async function balanceFor(t) {
       rec.balance = b.dollars;
       rec.balanceExact = b.exact != null ? b.exact : b.dollars;
       rec.balanceAt = new Date().toISOString();
+      // ── the per-shard split, kept because the TOTAL cannot back an order ──
+      //
+      // Kalshi holds cash per exchange shard and checks an order against the shard the market
+      // lives on: "Programmatic traders must preallocate collateral on a given exchange shard
+      // before order placement." Crypto is shard 2. An account with $24.17 on shard 0 and 2c on
+      // shard 2 has a $24.19 balance and cannot buy one contract — which is exactly the
+      // "400 insufficient balance" that followed the shard record being created.
+      if (Array.isArray(b.breakdown)) {
+        rec.balanceShards = {};
+        for (const row of b.breakdown) rec.balanceShards[String(row.index)] = row.dollars;
+      }
       t.save();
-      return { dollars: b.dollars, exact: rec.balanceExact, cached: false, breakdown: b.breakdown };
+      return {
+        dollars: b.dollars, exact: rec.balanceExact, cached: false,
+        breakdown: b.breakdown, shards: rec.balanceShards || null
+      };
     }
     return { dollars: rec.balance, cached: true, why: (b && b.why) || 'Kalshi did not answer' };
   } catch (e) {
@@ -259,12 +284,19 @@ async function mainPayload(t) {
     .setDescription(`${st.badge} **${st.title}** — ${st.text}`);
 
   // ── the headline block: where the money is ──
+  // When cash is split across shards, the total is not the number that can trade. Said on the
+  // Balance block itself, because that is where somebody looks to answer "can it afford a trade".
+  const shardCash = live && bal.shards ? Number(bal.shards[String(CRYPTO_SHARD)]) : null;
+  const shardShort = shardCash != null && bal.dollars != null &&
+    (bal.dollars - shardCash) > 1 && shardCash < BAND_LO;
   e.addFields({
     name: 'Balance',
     value: table([
       ['Equity', money(shown) + (capped ? `   (capped by your ${money(ceiling)} balance)` : '')],
       ['Started at', money(eq.start)],
       ['Realised', signed(eq.realised)],
+      shardShort && ['Usable here', `${money(shardCash)}   ⚠️ crypto trades on shard ` +
+        `${CRYPTO_SHARD}; the rest of your balance is on another shard and cannot back an order`],
       eq.atRisk > 0 && ['Committed', `${money(eq.atRisk)} in ${open.length} open`],
       eq.atRisk > 0 && ['Free to bet', money(eq.free)]
     ]),
@@ -633,6 +665,9 @@ function adminPayload() {
       dailyStop: t.get('dailyStopLoss'),
       todayRealised: t.day().realised,
       lastReject: t.rec.lastReject || null,
+      balanceShards: t.rec.balanceShards || null,
+      // Crypto is shard 2 in Kalshi's own sharding doc, and every market this bot trades is crypto.
+      cryptoShard: CRYPTO_SHARD,
       paperOpen: opens.filter(p => !p.live).length,
       liveOpen: opens.filter(p => p.live).length,
       atRiskLive: book.atRisk(b, { liveOnly: true }),

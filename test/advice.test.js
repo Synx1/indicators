@@ -54,6 +54,23 @@ has(one({ balance: 1.2, shares: 7, dailyStop: null }), 'cannot-afford',
 lacks(one({ balance: 1.2, shares: 7, dailyStop: null, armed: false }), 'cannot-afford',
   'not armed means no order is going out to be refused');
 
+// ── the money is on the wrong exchange shard ────────────────────
+// Kalshi holds cash per shard and crypto trades on shard 2. A $24.90 balance with 2c on shard 2 is
+// an account that looks funded and cannot buy one contract.
+const wrongShard = one({ balanceShards: { '0': 24.88, '2': 0.02 }, cryptoShard: 2 });
+has(wrongShard, 'wrong-shard', '$24.88 on shard 0, 2c where the crypto markets trade');
+eq(wrongShard[0].severity, 'high', 'and it blocks every live entry, so it leads');
+assert.ok(/shard 2/.test(wrongShard.find(f => f.code === 'wrong-shard').text),
+  'names the shard the money needs to be on'); checks++;
+assert.ok(/transfer/i.test(wrongShard.find(f => f.code === 'wrong-shard').fix),
+  'and says a transfer is the fix'); checks++;
+lacks(one({ balanceShards: { '0': 4.9, '2': 20.0 }, cryptoShard: 2 }), 'wrong-shard',
+  'funded on the trading shard is not a finding');
+lacks(one({ balanceShards: null, cryptoShard: 2 }), 'wrong-shard',
+  'no breakdown read yet is not a finding either — silence beats a guess');
+lacks(one({ balanceShards: { '0': 24.88, '2': 0.02 }, cryptoShard: 2, live: false }), 'wrong-shard',
+  'a paper account spends no collateral on any shard');
+
 // ── a daily stop that can never trip ────────────────────────────
 has(one({ dailyStop: 20 }), 'stop-too-big', 'a $20 stop on a $24.90 account stops nothing');
 lacks(one({ dailyStop: 8 }), 'stop-too-big', 'a third of the account is a working stop');

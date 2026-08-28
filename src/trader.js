@@ -182,7 +182,12 @@ async function decideFor(coin) {
     : (s.price > avgClose ? 'DIP' : 'MOVE');
 
   return {
-    sym: coin.sym, market, strike, minutesLeft,
+    sym: coin.sym, market,
+    // The shard this market lives on, taken from Kalshi's own field rather than inferred. The
+    // collateral check happens inside that shard's matching engine, so it is what an
+    // affordability test has to be measured against.
+    exchangeIndex: market.exchange_index == null ? null : Number(market.exchange_index),
+    strike, minutesLeft,
     side: r.side, direction: r.side === 'YES' ? 'UP' : 'DOWN',
     confidence: r.confidence, z: r.z, confirm, rsi: Math.round(rsi),
     price, pricePct: Math.round(price * 100), style,
@@ -247,6 +252,21 @@ function sharesFor(t, d) {
  * Every refusal is a sentence with the numbers in it. A refusal that hides its arithmetic is
  * indistinguishable from a bug, and that cost a real evening on the other bot.
  */
+/**
+ * Cash on one exchange shard, or null when the split is not known yet.
+ *
+ * Kalshi's balance endpoint reports a per-shard breakdown; panel.balanceFor() caches it. Null means
+ * "no breakdown read yet", which must fall back to the total rather than to zero — refusing every
+ * order because a cache is cold would be worse than the bug this exists for.
+ */
+function shardCash(t, exchangeIndex) {
+  if (exchangeIndex == null) return null;
+  const byShard = t.rec.balanceShards;
+  if (!byShard || typeof byShard !== 'object') return null;
+  const v = byShard[String(exchangeIndex)];
+  return Number.isFinite(Number(v)) ? Number(v) : null;
+}
+
 function accountBlock(t, d) {
   const b = t.rec.book;
 
@@ -323,12 +343,25 @@ function accountBlock(t, d) {
   // subtracted to be safe. Refusing here produces a sentence with two numbers in it; letting the
   // order go produces an insufficient-funds rejection that says nothing about how far short it was.
   if (live && t.rec.balance != null) {
-    const free = +(Number(t.rec.balance) - book.atRisk(b, { liveOnly: true })).toFixed(2);
+    // ── measured against the shard, not the account ──
+    //
+    // Kalshi holds cash per exchange shard and the matching engine checks the order against the
+    // shard the market lives on. $24.17 parked on shard 0 will not back a crypto order on shard 2:
+    // that is a "400 insufficient balance" from an account whose balance looks ample. So when the
+    // per-shard split is known, the shard's own cash is the figure, and the refusal says where the
+    // money actually is rather than repeating a total that cannot be spent here.
+    const shard = shardCash(t, d.exchangeIndex);
+    const usable = shard == null ? Number(t.rec.balance) : shard;
+    const free = +(usable - book.atRisk(b, { liveOnly: true })).toFixed(2);
     if (cost > free) {
+      const where = shard == null ? '' :
+        `. Your balance is ${users.money(t.rec.balance)} but only ${users.money(shard)} of it is ` +
+        `on exchange shard ${d.exchangeIndex}, which is where this market trades — Kalshi checks ` +
+        'the order against that shard, so the rest cannot back it until it is transferred';
       return `${users.money(cost)} for ${shares} at ${d.pricePct}¢ but only ` +
-        `${users.money(free)} is free (balance ${users.money(t.rec.balance)}` +
-        (openN ? `, ${users.money(book.atRisk(b, { liveOnly: true }))} committed to ${openN} open` : '') +
-        `). ${Math.floor(free / d.price)} contracts would fit.`;
+        `${users.money(free)} is free` +
+        (openN ? ` (${users.money(book.atRisk(b, { liveOnly: true }))} committed to ${openN} open)` : '') +
+        `${where}. ${Math.floor(free / d.price)} contracts would fit.`;
     }
   }
   return null;
@@ -772,7 +805,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
-  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit,
+  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,
