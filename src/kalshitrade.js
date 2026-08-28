@@ -313,11 +313,38 @@ function forUser(authProvider) {
   async function balance() {
     const r = await call('GET', '/portfolio/balance', { label: 'balance' });
     if (!r.ok) return r;
-    const cents = Number(r.data?.balance);
-    if (!isFinite(cents)) {
+    const d = r.data || {};
+
+    // ── read `balance_dollars` first, and `balance` only as a fallback ──
+    //
+    // Kalshi returns BOTH, and they do not carry the same precision. Observed on a live account:
+    //
+    //   { balance: 0, balance_dollars: "0.0058", balance_breakdown: [...] }
+    //
+    // `balance` is integer cents, so anything under a cent reads as exactly 0 — which is how an
+    // account holding real dust reported "$0.00" and looked like a broken parser rather than an
+    // empty account. The dollars string keeps the fraction, so it is the honest source.
+    const dollarsRaw = d.balance_dollars != null ? Number(d.balance_dollars) : NaN;
+    const cents = Number(d.balance);
+    const dollars = Number.isFinite(dollarsRaw) ? dollarsRaw
+      : (Number.isFinite(cents) ? cents / 100 : NaN);
+    if (!Number.isFinite(dollars)) {
       return { ok: false, status: null, why: 'balance response had no usable number' };
     }
-    return { ok: true, dollars: +(cents / 100).toFixed(2), cents };
+    return {
+      ok: true,
+      // Rounded for display, and the exact figure kept beside it so "is it really zero" is
+      // answerable without another request.
+      dollars: +dollars.toFixed(2),
+      exact: dollars,
+      cents: Number.isFinite(cents) ? cents : Math.round(dollars * 100),
+      portfolioValue: Number.isFinite(Number(d.portfolio_value)) ? Number(d.portfolio_value) / 100 : null,
+      // Kalshi splits the balance across exchange indices. Kept so a balance that is present but
+      // sitting somewhere unexpected is visible rather than invisible.
+      breakdown: Array.isArray(d.balance_breakdown)
+        ? d.balance_breakdown.map(b => ({ index: b.exchange_index, dollars: Number(b.balance) }))
+        : null
+    };
   }
 
   /**

@@ -105,16 +105,19 @@ const BAL_TTL_MS = 20000;
 async function balanceFor(t) {
   const rec = t.rec;
   const fresh = rec.balanceAt && (Date.now() - new Date(rec.balanceAt).getTime()) < BAL_TTL_MS;
-  if (fresh && rec.balance != null) return { dollars: rec.balance, cached: true };
+  if (fresh && rec.balance != null) {
+    return { dollars: rec.balance, exact: rec.balanceExact, cached: true };
+  }
   if (!auth.isImported(t.userId)) return { dollars: null, cached: false, why: 'no key imported' };
   try {
     const client = kt.forUser(auth.forUser(t.userId));
     const b = await client.balance();
     if (b && b.ok && b.dollars != null) {
       rec.balance = b.dollars;
+      rec.balanceExact = b.exact != null ? b.exact : b.dollars;
       rec.balanceAt = new Date().toISOString();
       t.save();
-      return { dollars: b.dollars, cached: false };
+      return { dollars: b.dollars, exact: rec.balanceExact, cached: false, breakdown: b.breakdown };
     }
     return { dollars: rec.balance, cached: true, why: (b && b.why) || 'Kalshi did not answer' };
   } catch (e) {
@@ -251,6 +254,29 @@ async function mainPayload(t) {
       name: 'No Kalshi key — paper works anyway',
       value: 'You do **not** need a key. It is already scanning and the P&L above is real ' +
         'bookkeeping on real prices. A key buys one thing: **real money**.',
+      inline: false
+    });
+  } else {
+    // Stored, and it says so. "Did my key save?" was previously answered by guessing from
+    // whether a balance appeared, which is how a saved key reading a near-empty account looked
+    // like a key that had not saved at all.
+    const st2 = auth.status(t.userId) || {};
+    const exact = bal.exact != null ? Number(bal.exact) : null;
+    const dust = exact != null && exact > 0 && exact < 0.01;
+    e.addFields({
+      name: '🔑 Kalshi key saved',
+      value: table([
+        ['Key ID', String(st2.keyId || auth.maskedKeyId(t.userId) || '—')],
+        ['Imported', st2.importedAt ? new Date(st2.importedAt).toLocaleString() : '—'],
+        ['Linked to', t.rec.tag ? `${t.rec.tag}  (${t.userId})` : t.userId],
+        ['Balance', bal.dollars == null ? `— ${bal.why || 'not read yet'}`
+          : dust ? `${money(exact)}  — under a cent, so this account is effectively empty`
+            : money(bal.dollars)]
+      ]) + (bal.dollars != null && exact != null && exact < 1
+        ? '_Kalshi reports this key\'s balance, so a figure you do not recognise means the key ' +
+          'belongs to a different account than the one you funded — or the deposit has not ' +
+          'settled. Nothing here can spend money that is not in the account it can see._'
+        : ''),
       inline: false
     });
   }
