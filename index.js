@@ -99,6 +99,19 @@ function armAck(interaction) {
   return { cancel, acked };
 }
 
+/**
+ * Defer, but only if nothing has acknowledged yet.
+ *
+ * The 2.2s watchdog in armAck() can fire while a handler is still working, and the handler then
+ * called deferUpdate() itself — Discord rejects the second one with "Interaction has already been
+ * acknowledged", which surfaced as buttons that simply did nothing. Both paths now go through here,
+ * so whichever gets there first wins and the other is a no-op.
+ */
+async function ackUpdate(interaction) {
+  if (interaction.replied || interaction.deferred) return;
+  await ackUpdate(interaction);
+}
+
 async function handle(interaction) {
   const ack = armAck(interaction);
   try {
@@ -163,7 +176,7 @@ async function dispatch(interaction) {
       if (settings.SCHEMA[key].type === settings.TYPE.BOOL) {
         const next = t.get(key) ? 'off' : 'on';
         t.set(key, next);
-        await interaction.deferUpdate();
+        await ackUpdate(interaction);
         return interaction.editReply(panel.settingsPayload(t));
       }
       return interaction.showModal(panel.settingModal(t, key));
@@ -252,13 +265,13 @@ async function dispatch(interaction) {
   }
 
   if (id === `${panel.ID}:admin`) {
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     return interaction.editReply(panel.adminPayload());
   }
   if (id.startsWith(`${panel.ID}:mkt:`)) {
     const sym = id.slice(`${panel.ID}:mkt:`.length);
     const r = gl.toggleMarket(sym);
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     await interaction.editReply(panel.adminPayload());
     if (!r.ok) return;
     return interaction.followUp({
@@ -270,7 +283,7 @@ async function dispatch(interaction) {
   if (id === `${panel.ID}:kill`) {
     const now = !gl.isKilled();
     gl.setKilled(now, t.userId);
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     await interaction.editReply(panel.adminPayload());
     return interaction.followUp({
       content: now
@@ -285,15 +298,15 @@ async function dispatch(interaction) {
   }
 
   if (id === `${panel.ID}:home` || id === `${panel.ID}:refresh`) {
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     return interaction.editReply(await panel.mainPayload(t));
   }
   if (id === `${panel.ID}:settings`) {
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     return interaction.editReply(panel.settingsPayload(t));
   }
   if (id === `${panel.ID}:trades`) {
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     return interaction.editReply(panel.tradesPayload(t));
   }
   if (id === `${panel.ID}:live`) {
@@ -301,13 +314,13 @@ async function dispatch(interaction) {
     // Going back to paper disarms too. Leaving `armed` set on a paper account means the next
     // flip to live is instantly hot, which is not what anybody pressing "Go paper" intends.
     if (!t.get('live')) t.set('armed', 'off');
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     return interaction.editReply(await panel.mainPayload(t));
   }
   if (id === `${panel.ID}:arm`) {
     if (t.get('armed')) {
       t.set('armed', 'off');
-      await interaction.deferUpdate();
+      await ackUpdate(interaction);
       return interaction.editReply(await panel.mainPayload(t));
     }
     // Refusals name the missing thing rather than saying no.
@@ -326,7 +339,7 @@ async function dispatch(interaction) {
       });
     }
     t.set('armed', 'on');
-    await interaction.deferUpdate();
+    await ackUpdate(interaction);
     await interaction.editReply(await panel.mainPayload(t));
     return interaction.followUp({
       content: `🔴 **Armed.** The next qualifying signal buys ${t.fmt('shares')} contracts with ` +

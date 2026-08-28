@@ -349,11 +349,21 @@ function importKey(userId, { keyId, privateKey }) {
 function load(userId) {
   const uid = String(userId || '');
   if (cache.has(uid)) return cache.get(uid);
-  if (known.has(uid)) return null;
   if (!validId(uid)) return null;
-  known.add(uid);
 
-  migrateLegacy();
+  // ── `known` gates the MIGRATION, not the lookup ──
+  //
+  // It used to short-circuit the whole function: one miss and every later call for that user
+  // returned null without touching the disk again. So a panel that asked "is a key imported?"
+  // before the key existed reported "no key" for the rest of that process's life, while a fresh
+  // process saw the key perfectly — which is exactly how a saved key looked unsaved.
+  //
+  // Only migrateLegacy() is worth doing once per user; existsSync is a few microseconds and
+  // buying that with a permanently wrong answer was never a good trade.
+  if (!known.has(uid)) {
+    known.add(uid);
+    migrateLegacy();
+  }
 
   const file = path.join(USER_DIR, `${uid}.enc`);
   if (!fs.existsSync(file)) return null;
