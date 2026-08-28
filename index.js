@@ -343,8 +343,16 @@ async function dispatch(interaction) {
     }
     // Refusals name the missing thing rather than saying no.
     if (!auth.isImported(t.userId)) {
+      // Distinguish "no key" from "a key that will not decrypt". Telling somebody to import a key
+      // they already imported is the most confusing message this panel can produce, and it was
+      // produced twice.
+      const onDisk = auth.hasKeyFile(t.userId);
       return interaction.reply({
-        content: '❌ No Kalshi key imported, so there is nothing to arm. Press **Import key** first.',
+        content: onDisk
+          ? '❌ A key file exists for your account but it could not be decrypted — almost always ' +
+            '**KALSHI_KEY_SECRET** having changed since it was saved. Set the old value back, or ' +
+            'press **Import key** to replace it.'
+          : '❌ No Kalshi key imported, so there is nothing to arm. Press **Import key** first.',
         flags: MessageFlags.Ephemeral
       });
     }

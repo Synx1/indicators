@@ -303,7 +303,19 @@ async function mainPayload(t) {
     e.addFields({ name: '🚨 Kill switch is ON',
       value: 'Nothing opens for anybody. Anything held is still managed and settled.', inline: false });
   }
-  if (!auth.isImported(t.userId)) {
+  if (keyFile && !keyed) {
+    // The file is there and could not be read. Almost always a changed KALSHI_KEY_SECRET, which is
+    // recoverable with the old value and unrecoverable without it — so it must not be reported as
+    // "no key imported", which would send somebody to re-import when the problem is the secret.
+    e.addFields({
+      name: '⚠️  Key file is present but could not be read',
+      value: `A credential exists for ${t.userId} on disk, and decrypting it failed. That is ` +
+        'almost always **KALSHI_KEY_SECRET changing**: the value that encrypted the file is the ' +
+        'only value that can read it.\n\nIf you know the old secret, set it back. Otherwise ' +
+        '**Import key** again — the old file is replaced, nothing else is lost.',
+      inline: false
+    });
+  } else if (!keyed) {
     e.addFields({
       name: 'No Kalshi key — paper works anyway',
       value: 'You do **not** need a key. It is already scanning and the P&L above is real ' +

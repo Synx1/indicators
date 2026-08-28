@@ -461,6 +461,24 @@ function migrateLegacy() {
   }
 }
 
+/**
+ * Is a key file on disk for this user, ignoring every cache?
+ *
+ * A cache that answers "no key" wrongly is a claim the user cannot argue with: the panel says
+ * import one, they already did, and nothing on screen can tell them which is true. It has happened
+ * twice — once from a negative cache that never re-read the disk, and once from a process that
+ * predated the fix — so the panel should not have to trust a cache for something this
+ * consequential.
+ *
+ * This is the ground truth. It says nothing about whether the file can be DECRYPTED, which is the
+ * point: "the file is there but unreadable" and "there is no file" need different sentences.
+ */
+function hasKeyFile(userId) {
+  const uid = String(userId || '');
+  if (!validId(uid)) return false;
+  try { return fs.existsSync(path.join(USER_DIR, `${uid}.enc`)); } catch (_) { return false; }
+}
+
 function isImported(userId) {
   return Boolean(load(userId));
 }
@@ -627,6 +645,7 @@ module.exports = {
   init,
   importKey,
   isImported,
+  hasKeyFile,
   status,
   maskedKeyId,
   listUsers,
