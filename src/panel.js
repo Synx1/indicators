@@ -140,7 +140,12 @@ function statusLine(t) {
     return { badge: '🔴', title: 'Live and armed', colour: 0x4ade80,
       text: 'the next qualifying signal buys with real money.' };
   }
-  return { badge: '🟡', title: 'Live, not trading', colour: 0xfbbf24, text: block };
+  return {
+    badge: '🟡', title: 'Live, not trading', colour: 0xfbbf24,
+    // Names the consequence, not just the condition. "not armed" is a state; "still filling as
+    // paper" is what it MEANS, and that is the sentence somebody needs.
+    text: `${block} — so signals are **still filling as paper**. Press **Arm** to trade for real.`
+  };
 }
 
 async function mainPayload(t) {

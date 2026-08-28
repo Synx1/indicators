@@ -310,12 +310,27 @@ async function dispatch(interaction) {
     return interaction.editReply(panel.tradesPayload(t));
   }
   if (id === `${panel.ID}:live`) {
-    t.set('live', t.get('live') ? 'off' : 'on');
+    const turningOn = !t.get('live');
+    t.set('live', turningOn ? 'on' : 'off');
     // Going back to paper disarms too. Leaving `armed` set on a paper account means the next
     // flip to live is instantly hot, which is not what anybody pressing "Go paper" intends.
-    if (!t.get('live')) t.set('armed', 'off');
+    if (!turningOn) t.set('armed', 'off');
     await ackUpdate(interaction);
-    return interaction.editReply(await panel.mainPayload(t));
+    await interaction.editReply(await panel.mainPayload(t));
+    if (!turningOn) return;
+    // Live mode ALONE changes nothing, and pressing a button labelled "Go live" and then watching
+    // paper fills arrive is a reasonable thing to read as broken. So say what is still missing,
+    // at the moment the expectation is formed rather than in a status line to be noticed later.
+    const armedNow = t.get('armed') === true;
+    if (armedNow) return;
+    return interaction.followUp({
+      content: '🟡 **Live mode is on — but nothing trades for real yet.**\n\n' +
+        'Signals will keep filling as **paper** until you press **Arm**. Two switches on ' +
+        'purpose: live is "I intend to trade real money", armed is "I am watching right now" — ' +
+        'and arming is cleared by every restart, so real money can only ever be trading because ' +
+        'somebody armed it since the process started.',
+      flags: MessageFlags.Ephemeral
+    });
   }
   if (id === `${panel.ID}:arm`) {
     if (t.get('armed')) {
@@ -341,10 +356,24 @@ async function dispatch(interaction) {
     t.set('armed', 'on');
     await ackUpdate(interaction);
     await interaction.editReply(await panel.mainPayload(t));
+
+    // Arming an account that cannot afford one contract is not an error, but every order it
+    // places will be refused by Kalshi — so it is said here rather than discovered as a stream of
+    // rejections. The cheapest entry this bot will take is 25c, so that is the floor to compare.
+    const bal = await panel.balanceFor(t);
+    const shares = Number(t.get('shares')) || 0;
+    const cheapest = +(shares * 0.25).toFixed(2);
+    const short = bal.dollars != null && bal.dollars < cheapest;
     return interaction.followUp({
       content: `🔴 **Armed.** The next qualifying signal buys ${t.fmt('shares')} contracts with ` +
-        `real money.\n\nArming does not survive a restart — a redeploy or a crash brings you ` +
-        `back in paper.`,
+        `real money.\n\n` +
+        (short
+          ? `⚠️ Your Kalshi balance is **${users.money(bal.dollars)}**, and ${shares} contracts ` +
+            `costs at least **${users.money(cheapest)}** even at this bot's cheapest 25¢ entry. ` +
+            `Every live order will be refused for insufficient funds until the account is ` +
+            `funded — paper keeps running either way.\n\n`
+          : '') +
+        `Arming does not survive a restart — a redeploy or a crash brings you back in paper.`,
       flags: MessageFlags.Ephemeral
     });
   }
