@@ -17,6 +17,7 @@ const auth = require('./src/kalshiauth');
 const kt = require('./src/kalshitrade');
 const gl = require('./src/markets');
 const panel = require('./src/panel');
+const trader = require('./src/trader');
 
 const line = (...a) => console.log(...a);
 
@@ -338,6 +339,14 @@ client.once(Events.ClientReady, async c => {
   line(`  Discord: connected as ${c.user.tag}`);
   try { await registerCommands(c.application.id); }
   catch (e) { line(`  !! could not register /dashboard: ${e.message}`); }
+
+  // Started after Discord so its log lines have somewhere to go and the banner is already out.
+  // TRADER=off runs the panel alone, which is what iterating on the UI wants.
+  if (process.env.TRADER === 'off') {
+    line('  trader: OFF (TRADER=off) — panel only, no scanning');
+  } else {
+    trader.start({ log: line });
+  }
   line('  ready — DM the bot and run /dashboard');
 });
 

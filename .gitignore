@@ -16,3 +16,6 @@ state.json
 # (default is ~/.indicbot/users) but a mistaken KEY_DIR must not become a committed private key.
 keys/
 *.enc
+bot-panel.log
+users.json
+globals.json
