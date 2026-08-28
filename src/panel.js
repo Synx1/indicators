@@ -197,10 +197,12 @@ async function mainPayload(t) {
   e.addFields({
     name: 'Performance',
     value: table([
+      // Both lines in the SAME shape. They read as a comparison, so describing one with W/L and
+      // the other with a percentage made them look like they disagreed when they never did.
       ['Today', `${signed(today.net)}   ${today.n} closed` +
-        (today.n ? `  ·  ${today.wins}W/${today.losses}L` : '')],
+        (today.n ? `  ·  ${today.wins}W/${today.losses}L  ·  ${pct(today.wins / today.n)}` : '')],
       ['All time', `${signed(all.net)}   ${all.n} closed` +
-        (all.hit == null ? '' : `  ·  ${pct(all.hit)} won`)],
+        (all.n ? `  ·  ${all.wins}W/${all.losses}L  ·  ${pct(all.hit)}` : '')],
       ['Peak equity', money(eq.peak) +
         (eq.fromPeak > 0.005 ? `   ${signed(-eq.fromPeak)} from peak` : '   ← at a new high')],
       eq.maxDrawdown > 0.005 && ['Worst drop', `${signed(-eq.maxDrawdown)} peak to trough`],
@@ -208,7 +210,10 @@ async function mainPayload(t) {
     ]) + (all.n >= 3 && all.hit != null
       // Win rate is the one figure here with a denominator that cannot be exceeded, so it is the
       // one a bar can honestly draw. Below three trades it would be drawing noise.
-      ? `${bar(all.hit)}  ${pct(all.hit)} of ${all.n} won\n` : ''),
+      //
+      // Labelled "2 of 3 won" and not "66.7% of 3 won": the latter parses as "66.7%, of which 3
+      // won", which is how a correct 2W/1L book got read as three wins.
+      ? `${bar(all.hit)}  ${all.wins} of ${all.n} won\n` : ''),
     inline: false
   });
 
