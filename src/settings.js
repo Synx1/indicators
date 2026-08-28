@@ -50,6 +50,39 @@ const SCHEMA = {
       'immediate-or-cancel order on a liquid 15-minute market.'
   },
 
+  // ── bankroll: the number every size is a fraction of ──
+  //
+  // Two of them, never one. Paper and live are different questions: paper asks "what would this
+  // strategy do with $500", live asks "how much of my actual Kalshi balance may this bot use".
+  // The other bot had a single figure serving both and there was no combination of settings that
+  // meant "trade $100 live, simulate $500 on paper" — the two were permanently entangled.
+  liveBankroll: {
+    group: 'money', label: 'Live bankroll', type: TYPE.MONEY, def: null, nullable: true,
+    min: 1, max: 1000000,
+    help: 'The most of your Kalshi balance this bot may treat as its own. Blank = the whole ' +
+      'balance is in play.\n\n' +
+      'It is a sizing limit, not a ring-fence: nothing stops you spending the rest yourself, and ' +
+      'a position already open is still worth what it is worth. With $850 in Kalshi and this set ' +
+      'to $100, the bot sizes against $100 — so growth in the other $750 cannot quietly grow ' +
+      'your bets.\n\n' +
+      'Capped by your real balance whatever you type here. You cannot allocate money you do not ' +
+      'hold, and the panel shows the EFFECTIVE figure rather than the one entered.'
+  },
+  paperBankroll: {
+    group: 'money', label: 'Paper bankroll', type: TYPE.MONEY, def: 500, min: 1, max: 1000000,
+    help: 'The starting balance for paper trading. Independent of the live figure, so you can ' +
+      'simulate a big bankroll while risking a small one.\n\n' +
+      'Setting it RE-BASELINES paper: P&L counts from the moment you set it, and earlier paper ' +
+      'trades stop counting against it. Without that, a paper book carrying losses swallows any ' +
+      'figure you type and the bankroll pins at zero — which is exactly the trap the other bot ' +
+      'had, where no value could recover it.'
+  },
+  paperResetAt: {
+    group: 'money', label: 'Paper baseline', type: TYPE.INT, def: null, nullable: true,
+    min: 0, max: 4102444800000, hidden: true,
+    help: 'Internal. When the paper bankroll was last set — paper P&L counts from here.'
+  },
+
   // ── real money, and the two switches that gate it ──
   live: {
     group: 'money', label: 'Live mode', type: TYPE.BOOL, def: false,
@@ -89,8 +122,15 @@ const GROUPS = {
 };
 
 /** Schema keys in a group, in declaration order. */
+// `hidden` is for bookkeeping a user owns but must never be asked to type — paperResetAt is a
+// millisecond timestamp the bankroll flow writes for them.
 function keysIn(group) {
-  return Object.keys(SCHEMA).filter(k => SCHEMA[k].group === group);
+  return Object.keys(SCHEMA).filter(k => SCHEMA[k].group === group && !SCHEMA[k].hidden);
+}
+
+/** Every key a panel may offer, in declaration order, hidden ones excluded. */
+function visibleKeys() {
+  return Object.keys(SCHEMA).filter(k => !SCHEMA[k].hidden);
 }
 
 /**
@@ -162,4 +202,4 @@ function defaults() {
   return out;
 }
 
-module.exports = { TYPE, SCHEMA, GROUPS, keysIn, coerce, format, defaults };
+module.exports = { TYPE, SCHEMA, GROUPS, keysIn, visibleKeys, coerce, format, defaults };

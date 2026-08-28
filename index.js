@@ -15,6 +15,7 @@ const users = require('./src/users');
 const settings = require('./src/settings');
 const auth = require('./src/kalshiauth');
 const kt = require('./src/kalshitrade');
+const gl = require('./src/markets');
 const panel = require('./src/panel');
 
 const line = (...a) => console.log(...a);
@@ -45,6 +46,7 @@ line(`  Owner      ${OWNER_ID}`);
 line('='.repeat(78));
 
 auth.init();
+gl.init({ log: line });
 users.init({ log: line });
 
 const client = new Client({
@@ -212,15 +214,72 @@ async function dispatch(interaction) {
       if (!res.ok) {
         return interaction.reply({ content: `❌ **${spec.label}**: ${res.why}`, flags: MessageFlags.Ephemeral });
       }
+      let extra = '';
+      if (key === 'paperBankroll') {
+        // Re-baseline, or the figure just typed is added to a lifetime paper P&L that can dwarf
+        // it — the trap that made the other bot's paper balance impossible to reset.
+        t.set('paperResetAt', String(Date.now()));
+        extra = '\n\nPaper P&L now counts from here; earlier paper trades no longer count ' +
+          'against it.';
+      }
+      if (key === 'liveBankroll') {
+        extra = '\n\nCapped by your real balance whatever is entered — the panel shows the ' +
+          'figure actually in play.';
+      }
       return interaction.reply({
-        content: `✅ **${spec.label}** is now **${t.fmt(key)}**` +
-          (res.was == null && res.value != null ? '' : ''),
+        content: `✅ **${spec.label}** is now **${t.fmt(key)}**${extra}`,
         flags: MessageFlags.Ephemeral
       });
     }
   }
 
   if (!interaction.isButton()) return;
+
+// ── owner-only, checked here rather than per-button ──
+  //
+  // One gate for every fleet-wide control, so a control added later is owner-only by default
+  // instead of by somebody remembering to add the check.
+  const OWNER_IDS = [`${panel.ID}:admin`, `${panel.ID}:kill`];
+  const isOwnerControl = OWNER_IDS.includes(id) || id.startsWith(`${panel.ID}:mkt:`);
+  if (isOwnerControl && !t.isOwner) {
+    return interaction.reply({
+      content: '🔒 That control is owner-only.',
+      flags: MessageFlags.Ephemeral
+    });
+  }
+
+  if (id === `${panel.ID}:admin`) {
+    await interaction.deferUpdate();
+    return interaction.editReply(panel.adminPayload());
+  }
+  if (id.startsWith(`${panel.ID}:mkt:`)) {
+    const sym = id.slice(`${panel.ID}:mkt:`.length);
+    const r = gl.toggleMarket(sym);
+    await interaction.deferUpdate();
+    await interaction.editReply(panel.adminPayload());
+    if (!r.ok) return;
+    return interaction.followUp({
+      content: `${sym} is now **${r.enabled ? 'ON' : 'OFF'}** for everybody.` +
+        (r.enabled ? '' : ' Positions already open on it are still managed and settled.'),
+      flags: MessageFlags.Ephemeral
+    });
+  }
+  if (id === `${panel.ID}:kill`) {
+    const now = !gl.isKilled();
+    gl.setKilled(now, t.userId);
+    await interaction.deferUpdate();
+    await interaction.editReply(panel.adminPayload());
+    return interaction.followUp({
+      content: now
+        ? '🚨 **Kill switch ON.** Nothing opens for anybody, on any market.\n\n' +
+          'Anything already held is **still managed and settled** — this stops opening, it does ' +
+          'not abandon open positions. It also survives a restart, unlike arming, because a kill ' +
+          'is a decision somebody made and a redeploy must not undo it.'
+        : '✅ **Kill switch lifted.** Accounts that were armed before the kill still need to ' +
+          're-arm — arming never survives anything.',
+      flags: MessageFlags.Ephemeral
+    });
+  }
 
   if (id === `${panel.ID}:home` || id === `${panel.ID}:refresh`) {
     await interaction.deferUpdate();

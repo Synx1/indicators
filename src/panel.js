@@ -32,6 +32,7 @@ const { OWNER_ID } = require('./config');
 const settings = require('./settings');
 const users = require('./users');
 const book = require('./book');
+const gl = require('./markets');
 const auth = require('./kalshiauth');
 const kt = require('./kalshitrade');
 
@@ -42,6 +43,25 @@ const ID = 'ib';                                  // customId namespace
 const money = users.money;
 const signed = n => `${Number(n) >= 0 ? '+' : '-'}$${Math.abs(Number(n) || 0).toFixed(2)}`;
 const pct = n => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
+
+/**
+ * Aligned key/value block.
+ *
+ * Discord proportional text cannot be aligned — two lines of `label   value` drift apart and the
+ * panel reads as ransom-note. A fenced block is monospaced, so padding actually lines up, and it
+ * is the difference between a screen that looks built and one that looks pasted.
+ */
+function table(rows, { width } = {}) {
+  const visible = rows.filter(Boolean);
+  const w = width || Math.max(...visible.map(([k]) => String(k).length));
+  return '```\n' + visible.map(([k, v]) => `${String(k).padEnd(w)}  ${v}`).join('\n') + '\n```';
+}
+
+/** A small bar, for a share of something. Reads faster than a percentage. */
+function bar(frac, slots = 12) {
+  const n = Math.max(0, Math.min(slots, Math.round((Number(frac) || 0) * slots)));
+  return '█'.repeat(n) + '░'.repeat(slots - n);
+}
 
 let ctx = null;
 function init(context) { ctx = context || {}; return true; }
@@ -83,11 +103,21 @@ async function balanceFor(t) {
 }
 
 function statusLine(t) {
-  const live = t.get('live'), armed = t.get('armed');
-  if (!live) return { text: '📝 **PAPER** — decisions recorded, no orders sent', colour: 0x5b9dff };
+  const live = t.get('live');
+  if (gl.isKilled()) {
+    return { title: 'Halted', colour: 0xf87171,
+      text: 'The kill switch is on, so nothing will open for anybody.' };
+  }
+  if (!live) {
+    return { title: 'Paper', colour: 0x5b9dff,
+      text: 'Every decision is recorded and priced. No order is sent.' };
+  }
   const block = t.liveBlock();
-  if (!block) return { text: '🔴 **LIVE AND ARMED** — the next qualifying signal buys', colour: 0xf87171 };
-  return { text: `🟡 **LIVE, NOT TRADING** — ${block}`, colour: 0xfbbf24 };
+  if (!block) {
+    return { title: 'Live · armed', colour: 0x4ade80,
+      text: 'The next qualifying signal buys with real money.' };
+  }
+  return { title: 'Live · not trading', colour: 0xfbbf24, text: block };
 }
 
 async function mainPayload(t) {
@@ -95,58 +125,81 @@ async function mainPayload(t) {
   const st = statusLine(t);
   const open = book.openPositions(t.rec.book);
   const all = book.stats(t.rec.book);
-  const dayLedger = t.day();
   const todayBook = book.todayStats(t.rec.book);
+  const keyed = auth.isImported(t.userId);
+  const live = t.get('live');
 
+  // The bankroll actually in play. Live is capped by the real balance — you cannot allocate
+  // money you do not hold — and showing the number typed rather than the number used is the
+  // display-versus-execution split that made the other bot's sizing screen untrustworthy.
+  const asked = live ? t.get('liveBankroll') : t.get('paperBankroll');
+  const ceiling = live ? (bal.dollars == null ? null : bal.dollars) : null;
+  const effective = live
+    ? (asked == null ? ceiling : (ceiling == null ? asked : Math.min(asked, ceiling)))
+    : asked;
+  const shortfall = live && asked != null && ceiling != null && ceiling < asked - 0.005;
+
+  const atRisk = book.atRisk(t.rec.book);
   const e = new EmbedBuilder()
-    .setTitle(`${NAME} ${VERSION}`)
     .setColor(st.colour)
+    .setAuthor({ name: `${NAME} ${VERSION}` })
+    .setTitle(st.title)
     .setDescription(st.text);
 
-  e.addFields(
-    {
-      name: 'Money',
-      value: [
-        `Kalshi balance  **${bal.dollars == null ? '—' : money(bal.dollars)}**` +
-          (bal.why ? `  _(${bal.why})_` : ''),
-        `Today            **${signed(todayBook.net)}** on ${todayBook.n} closed`,
-        `All time         **${signed(all.net)}** on ${all.n} closed` +
-          (all.hit == null ? '' : ` · ${pct(all.hit)} won`)
-      ].join('\n'),
-      inline: false
-    },
-    {
-      name: `Open — ${open.length}`,
-      value: open.length
-        ? open.slice(0, 6).map(p =>
-          `**${p.sym}** ${p.direction} ${p.contracts}× @${p.priceCents}c  _(${money(p.cost)})_`).join('\n')
-          + (open.length > 6 ? `\n_…and ${open.length - 6} more_` : '')
-        : '_nothing open_',
-      inline: false
-    },
-    {
-      name: 'Size and exits',
-      value: [
-        `Shares per trade **${t.fmt('shares')}**`,
-        `Exit             **${t.fmt('cashoutAt')}**`,
-        `Daily stop       **${t.fmt('dailyStopLoss')}**` +
-          (t.get('dailyStopLoss') != null ? `  _(today ${signed(dayLedger.realised)})_` : '')
-      ].join('\n'),
-      inline: false
-    }
-  );
+  e.addFields({
+    name: live ? 'Real money' : 'Paper',
+    value: table([
+      ['Bankroll', effective == null ? '—' : money(effective) +
+        (shortfall ? `   (asked ${money(asked)}, you hold ${money(ceiling)})` : '')],
+      live && ['Kalshi balance', bal.dollars == null ? `—  ${bal.why || ''}` : money(bal.dollars)],
+      ['Today', `${signed(todayBook.net)}  on ${todayBook.n} closed`],
+      ['All time', `${signed(all.net)}  on ${all.n} closed${all.hit == null ? '' : `  ·  ${pct(all.hit)} won`}`],
+      atRisk > 0 && ['At risk now', money(atRisk)]
+    ]),
+    inline: false
+  });
 
-  const keyed = auth.isImported(t.userId);
-  if (!keyed) {
+  e.addFields({
+    name: `Open  ·  ${open.length}`,
+    value: open.length
+      ? table(open.slice(0, 6).map(p => [
+        `${p.sym} ${p.direction}`,
+        `${p.contracts}× @${p.priceCents}c   ${money(p.cost)}`
+      ])) + (open.length > 6 ? `…and ${open.length - 6} more` : '')
+      : '_nothing open_',
+    inline: false
+  });
+
+  e.addFields({
+    name: 'How it trades',
+    value: table([
+      ['Shares/trade', t.fmt('shares')],
+      ['Exit', t.fmt('cashoutAt')],
+      ['Daily stop', t.fmt('dailyStopLoss') +
+        (t.get('dailyStopLoss') != null ? `   today ${signed(t.day().realised)}` : '')],
+      ['Markets', `${gl.enabledSyms().length}/${gl.SYMS.length} on` +
+        (gl.enabledSyms().length === gl.SYMS.length ? '' : `   off: ${gl.SYMS.filter(x => !gl.isEnabled(x)).join(' ')}`)]
+    ]),
+    inline: false
+  });
+
+  if (gl.isKilled()) {
     e.addFields({
-      name: '⚠️ No Kalshi key',
-      value: 'Nothing can trade live until a key is imported. **Import key** below — you need ' +
-        'the Key ID and the .key file from Kalshi → Account & security → API Keys.',
+      name: '🚨 Kill switch is ON',
+      value: 'Nothing opens for anybody. Positions already held are still managed and settled.',
       inline: false
     });
   }
-  e.setFooter({ text: t.rec.tag ? `${t.rec.tag} · ${t.userId}` : t.userId });
-
+  if (!keyed) {
+    e.addFields({
+      name: '⚠️  No Kalshi key yet',
+      value: 'Live trading needs one. **Import key** below — the Key ID and the whole `.key` ' +
+        'file from Kalshi → Account & security → API Keys. It is proven against your account ' +
+        'before it is trusted.',
+      inline: false
+    });
+  }
+  e.setFooter({ text: t.rec.tag ? `${t.rec.tag}${t.isOwner ? '  ·  owner' : ''}` : t.userId });
   return { embeds: [e], components: mainComponents(t), flags: MessageFlags.Ephemeral };
 }
 
@@ -172,6 +225,10 @@ function mainComponents(t) {
       .setLabel(keyed ? 'Replace key' : 'Import key')
       .setStyle(keyed ? ButtonStyle.Secondary : ButtonStyle.Primary)
   );
+  if (t.isOwner) {
+    row2.addComponents(new ButtonBuilder().setCustomId(`${ID}:admin`)
+      .setLabel('Owner').setStyle(ButtonStyle.Danger));
+  }
   return [row1, row2];
 }
 
@@ -261,8 +318,101 @@ function tradesPayload(t) {
   };
 }
 
+// ── owner ───────────────────────────────────────────────────────
+//
+// Everything fleet-wide lives behind one door, and the door is checked at the dispatcher rather
+// than per-button, so a control added later is owner-only by default instead of by remembering.
+
+/**
+ * Every account's P&L, the kill switch, and the market toggles.
+ *
+ * Deliberately shows tags rather than raw ids where a tag is known, and never shows anybody's
+ * Kalshi key or balance beyond what they have realised — the owner needs to see performance and
+ * risk, which is not the same as needing to see somebody's account.
+ */
+function adminPayload() {
+  const all = users.all();
+  const rows = all.map(t => {
+    const st = book.stats(t.rec.book);
+    const today = book.todayStats(t.rec.book);
+    const open = book.openPositions(t.rec.book).length;
+    const live = t.get('live'), armed = t.get('armed');
+    return {
+      who: (t.rec.tag || t.userId).slice(0, 16),
+      state: gl.isKilled() ? 'halted' : !live ? 'paper' : armed ? 'ARMED' : 'live',
+      n: st.n, net: st.net, today: today.net, open,
+      atRisk: book.atRisk(t.rec.book),
+      hit: st.hit
+    };
+  }).sort((a, b) => b.net - a.net);
+
+  const fleetNet = rows.reduce((a, r) => a + r.net, 0);
+  const fleetToday = rows.reduce((a, r) => a + r.today, 0);
+  const fleetRisk = rows.reduce((a, r) => a + r.atRisk, 0);
+  const armedN = rows.filter(r => r.state === 'ARMED').length;
+
+  const e = new EmbedBuilder()
+    .setColor(gl.isKilled() ? 0xf87171 : armedN ? 0x4ade80 : 0x71717a)
+    .setAuthor({ name: `${NAME} ${VERSION} · owner` })
+    .setTitle(gl.isKilled() ? 'Halted — kill switch on' : `${all.length} account(s), ${armedN} armed`);
+
+  e.addFields({
+    name: 'Fleet',
+    value: table([
+      ['Today', signed(fleetToday)],
+      ['All time', signed(fleetNet)],
+      ['At risk now', money(fleetRisk)],
+      ['Markets on', `${gl.enabledSyms().length}/${gl.SYMS.length}`]
+    ]),
+    inline: false
+  });
+
+  e.addFields({
+    name: 'Accounts',
+    value: rows.length
+      ? table(rows.map(r => [
+        r.who,
+        `${r.state.padEnd(6)} ${String(r.n).padStart(4)}T ${signed(r.net).padStart(9)}` +
+        `  today ${signed(r.today).padStart(8)}${r.open ? `  ${r.open} open` : ''}`
+      ]))
+      : '_no accounts yet_',
+    inline: false
+  });
+
+  e.addFields({
+    name: 'Markets',
+    value: table(gl.SYMS.map(sym => [sym, gl.isEnabled(sym) ? '● on' : '○ off'])),
+    inline: false
+  });
+
+  return { embeds: [e], components: adminComponents(), flags: MessageFlags.Ephemeral };
+}
+
+function adminComponents() {
+  const rows = [];
+  // One button per market, in two rows of four/three. Labelled with the state it is IN, not the
+  // action, because a button reading "BTC off" is ambiguous about which it means.
+  for (let i = 0; i < gl.SYMS.length; i += 4) {
+    rows.push(new ActionRowBuilder().addComponents(
+      ...gl.SYMS.slice(i, i + 4).map(sym => new ButtonBuilder()
+        .setCustomId(`${ID}:mkt:${sym}`)
+        .setLabel(`${sym} ${gl.isEnabled(sym) ? 'on' : 'off'}`)
+        .setStyle(gl.isEnabled(sym) ? ButtonStyle.Success : ButtonStyle.Secondary))
+    ));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${ID}:kill`)
+      .setLabel(gl.isKilled() ? 'Lift kill switch' : 'KILL SWITCH')
+      .setStyle(gl.isKilled() ? ButtonStyle.Success : ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`${ID}:admin`).setLabel('Refresh').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${ID}:home`).setLabel('◀ Back').setStyle(ButtonStyle.Primary)
+  ));
+  return rows.slice(0, 5);
+}
+
 module.exports = {
   NAME, VERSION, ID, init, owns, isOwner,
   mainPayload, mainComponents, settingsPayload, settingModal, keyModal, tradesPayload,
+  adminPayload, adminComponents, table, bar,
   balanceFor, statusLine
 };
