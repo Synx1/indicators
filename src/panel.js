@@ -94,16 +94,32 @@ function scannerLine() {
  */
 const BAND_LO = 0.25;
 const BAND_HI = 0.80;
+/**
+ * Above this share of the balance in ONE position, say something even though it fits.
+ *
+ * 50% because a binary loses the entire stake: two consecutive losses at half the account is the
+ * account. The paper book has already produced a single -$19.69 trade, so this is not hypothetical.
+ */
+const CONCENTRATION = 0.5;
 function affordability(t, bal) {
   const shares = Number(t.get('shares')) || 0;
   const dollars = bal && bal.dollars != null ? Number(bal.dollars) : null;
-  if (!shares || dollars == null) return null;
+  if (!shares || dollars == null || !(dollars > 0)) return null;
   const worst = +(shares * BAND_HI).toFixed(2);
-  if (dollars >= worst) return null;
   const cheapest = +(shares * BAND_LO).toFixed(2);
   // Whole contracts only — a fraction of a contract is not a thing Kalshi sells.
   const fits = Math.floor(dollars / BAND_HI);
-  return { shares, dollars, worst, cheapest, fits, anyFit: dollars >= cheapest };
+  if (dollars >= worst) {
+    // It fits. But "fits" and "sensible" are different questions, and a size that fits by 90c
+    // while committing 96% of the balance is the one this used to stay silent about.
+    const share = worst / dollars;
+    if (share <= CONCENTRATION) return null;
+    const safer = Math.max(1, Math.floor((dollars * CONCENTRATION) / BAND_HI));
+    return { kind: 'concentrated', shares, dollars, worst, cheapest, fits, safer,
+      sharePct: Math.round(share * 100) };
+  }
+  return { kind: 'unaffordable', shares, dollars, worst, cheapest, fits,
+    anyFit: dollars >= cheapest, safer: Math.max(1, fits) };
 }
 
 let ctx = null;
@@ -286,7 +302,20 @@ async function mainPayload(t) {
   });
 
   const aff = live ? affordability(t, bal) : null;
-  if (aff) {
+  if (aff && aff.kind === 'concentrated') {
+    e.addFields({
+      name: `⚠️  One trade is ${aff.sharePct}% of your account`,
+      value: table([
+        ['Balance', money(aff.dollars)],
+        ['Your size', `${aff.shares} contracts`],
+        ['Costs', `${money(aff.cheapest)} at 25¢  …  ${money(aff.worst)} at 80¢`]
+      ]) +
+      `_A binary loses the **whole** stake, so two losses in a row at this size is the account. ` +
+      `**${aff.safer} contracts** keeps one trade under half. Auto size does this arithmetic for ` +
+      `you._`,
+      inline: false
+    });
+  } else if (aff) {
     e.addFields({
       name: aff.anyFit ? '⚠️  Your size only fits the cheapest entries' : '⚠️  Your size is unaffordable',
       value: table([

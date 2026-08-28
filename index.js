@@ -379,13 +379,18 @@ async function dispatch(interaction) {
     return interaction.followUp({
       content: `🔴 **Armed.** The next qualifying signal buys ${t.fmt('shares')} contracts with ` +
         `real money.\n\n` +
-        (short
-          ? `⚠️ Your balance is **${users.money(aff.dollars)}** and ${shares} contracts costs ` +
-            `**${users.money(aff.cheapest)}** at 25¢ up to **${users.money(aff.worst)}** at 80¢. ` +
-            `Most signals price 60–80¢, so those orders will be refused for insufficient funds. ` +
-            `Set **Shares per trade** to **${Math.max(1, aff.fits)}** to trade the whole band, or ` +
-            `fund the account — paper keeps running either way.\n\n`
-          : '') +
+        (aff && aff.kind === 'concentrated'
+          ? `⚠️ One trade is **${aff.sharePct}% of your ${users.money(aff.dollars)}** — ` +
+            `${shares} contracts costs up to ${users.money(aff.worst)} at 80¢. A binary loses the ` +
+            `whole stake, so two losses in a row at this size is the account. ` +
+            `**${aff.safer} contracts** keeps one trade under half.\n\n`
+          : aff
+            ? `⚠️ Your balance is **${users.money(aff.dollars)}** and ${shares} contracts costs ` +
+              `**${users.money(aff.cheapest)}** at 25¢ up to **${users.money(aff.worst)}** at 80¢. ` +
+              `Most signals price 60–80¢, so those orders will be refused for insufficient funds. ` +
+              `Set **Shares per trade** to **${aff.safer}** to trade the whole band, or fund the ` +
+              `account — paper keeps running either way.\n\n`
+            : '') +
         `Arming does not survive a restart — a redeploy or a crash brings you back in paper.`,
       flags: MessageFlags.Ephemeral
     });
