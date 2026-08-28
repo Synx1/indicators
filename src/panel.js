@@ -174,6 +174,11 @@ function statusLine(t) {
 async function mainPayload(t) {
   const bal = await balanceFor(t);
   const st = statusLine(t);
+  // Resolved ONCE per render and passed down, so two blocks in one render cannot disagree — and
+  // cross-checked against the disk, because a cache that wrongly says "no key" is a claim the user
+  // has no way to argue with.
+  const keyed = auth.isImported(t.userId);
+  const keyFile = auth.hasKeyFile(t.userId);
   const live = t.get('live');
   const b = t.rec.book;
   const open = book.openPositions(b);
