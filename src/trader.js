@@ -33,6 +33,7 @@ const book = require('./book');
 const kt = require('./kalshitrade');
 const auth = require('./kalshiauth');
 const notify = require('./notify');
+const activity = require('./activity');
 const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
 
 const axios = require('axios');
@@ -448,6 +449,12 @@ async function checkExits() {
         if (r.sold) {
           log(`  💰 ${t.rec.tag || t.userId}: cashed out ${p.sym} ${p.direction} ` +
             `${Math.round(p.price * 100)}c → ${Math.round(sell * 100)}c  ${r.position.pnl >= 0 ? '+' : ''}${r.position.pnl}`);
+          activity.push({
+            sym: p.sym, kind: 'SETTLE', reason: 'cashout',
+            detail: `${t.rec.tag || t.userId} — cashed out ${Math.round(p.price * 100)}¢ → ` +
+              `${Math.round(sell * 100)}¢, ${r.position.pnl >= 0 ? '+' : ''}${users.money(r.position.pnl)}`,
+            meta: { who: t.rec.tag || t.userId, pnl: r.position.pnl, live: p.live }
+          });
           await notify.cashout(t, r.position);
         } else {
           log(`  ${t.rec.tag || t.userId}: cashout failed on ${p.sym} — ${r.why}`);
@@ -478,6 +485,12 @@ async function checkExits() {
       t.save(); t.noteRealised(closed.pnl);
       log(`  ${won ? '✅' : '❌'} ${t.rec.tag || t.userId}: ${p.sym} ${p.direction} ` +
         `@${p.priceCents}c → ${won ? '100' : '0'}c  ${closed.pnl >= 0 ? '+' : ''}${closed.pnl}`);
+      activity.push({
+        sym: p.sym, kind: 'SETTLE', reason: won ? 'won' : 'lost',
+        detail: `${t.rec.tag || t.userId} — ${p.direction} @${p.priceCents}¢ settled ` +
+          `${won ? '100¢' : '0¢'}, ${closed.pnl >= 0 ? '+' : ''}${users.money(closed.pnl)}`,
+        meta: { who: t.rec.tag || t.userId, pnl: closed.pnl, live: p.live, seq: closed.seq }
+      });
       await notify.settled(t, closed, won);
     }
   }
@@ -499,8 +512,24 @@ async function runOnce() {
     try { d = await decideFor(coin); }
     catch (e) { noteSkip('error'); stats.lastError = `${coin.sym}: ${e.message}`; continue; }
 
-    if (d.skip) { noteSkip(d.skip); continue; }
+    if (d.skip) {
+      noteSkip(d.skip);
+      activity.push({ sym: coin.sym, kind: 'SKIP', reason: d.skip, detail: d.why });
+      continue;
+    }
     stats.decisions++;
+    activity.push({
+      sym: coin.sym, kind: 'TAKEN', reason: 'signal',
+      detail: `${d.direction} @${d.pricePct}¢ — ${d.confidence}% confidence, ${d.confirm}/4 ` +
+        `indicators agreed, ${d.style === 'DIP' ? 'bought a dip' : 'chased a move'}`,
+      meta: {
+        direction: d.direction, price: d.price, pricePct: d.pricePct,
+        confidence: d.confidence, confirm: d.confirm, z: d.z, rsi: d.rsi,
+        style: d.style, spot: d.spot, strike: d.strike,
+        spotAgeMs: d.spotAgeMs, minutesLeft: +d.minutesLeft.toFixed(2),
+        edgePt: d.edgePt, ticker: d.market.ticker, closeTime: d.market.close_time
+      }
+    });
     log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
       `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.style}`);
 
@@ -512,8 +541,21 @@ async function runOnce() {
           log(`    ${t.rec.tag || t.userId}: ${r.live ? 'LIVE' : 'paper'} ` +
             `${r.position.contracts}× @${r.position.priceCents}c` +
             (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''));
+          activity.push({
+            sym: coin.sym, kind: 'EXIT', reason: r.live ? 'filled-live' : 'filled-paper',
+            detail: `${t.rec.tag || t.userId} — ${r.live ? 'LIVE' : 'paper'} ` +
+              `${r.position.contracts}× @${r.position.priceCents}¢, cost ` +
+              `${users.money(r.position.cost)}` +
+              (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''),
+            meta: { who: t.rec.tag || t.userId, live: r.live, seq: r.position.seq }
+          });
         } else {
           log(`    ${t.rec.tag || t.userId}: skipped — ${r.why}`);
+          activity.push({
+            sym: coin.sym, kind: 'SKIP', reason: 'account',
+            detail: `${t.rec.tag || t.userId} — ${r.why}`,
+            meta: { who: t.rec.tag || t.userId }
+          });
         }
       } catch (e) {
         log(`    ${t.rec.tag || t.userId}: failed — ${e.message}`);
@@ -545,6 +587,7 @@ function start(opts = {}) {
 function stop() { running = false; if (timer) clearTimeout(timer); timer = null; }
 
 module.exports = {
+  activity,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,

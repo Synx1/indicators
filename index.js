@@ -19,6 +19,7 @@ const gl = require('./src/markets');
 const panel = require('./src/panel');
 const trader = require('./src/trader');
 const notify = require('./src/notify');
+const site = require('./src/site');
 
 const line = (...a) => console.log(...a);
 
@@ -360,6 +361,10 @@ client.once(Events.ClientReady, async c => {
   } else {
     trader.start({ log: line });
   }
+  // Served from THIS process, so the site reads the same in-memory book the trader writes and
+  // cannot disagree with the Discord panel. The old server.js read state.json off disk, which is
+  // one restart away from showing a stale file.
+  site.start({ log: line });
   line('  ready — DM the bot and run /dashboard');
 });
 

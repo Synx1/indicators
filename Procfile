@@ -1,3 +1,4 @@
-# The Discord panel is the process that must always be up — it is how anybody reaches the bot.
-# server.js serves the web dashboard on $PORT, which Railway routes the public domain to.
-web: node server.js & node index.js
+# ONE process. index.js is the Discord panel, the trading loop and the web dashboard, which is
+# what lets the site read the same in-memory book the trader writes instead of a file on disk.
+# Two processes would also fight over $PORT.
+web: node index.js
