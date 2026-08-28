@@ -262,7 +262,14 @@ async function mainPayload(t) {
   e.addFields({
     name: 'Setup',
     value: table([
-      ['Shares/trade', t.fmt('shares')],
+      ['Shares/trade', (() => {
+        if (!t.get('autoShares')) return t.fmt('shares');
+        // Auto size is arithmetic on a balance, so it has to show the ANSWER. A row reading
+        // "auto" tells somebody nothing about how big their next trade is.
+        let n = null;
+        try { n = require('./trader').sharesFor(t, { price: 0.80, pricePct: 80 }); } catch (_) {}
+        return `${n == null ? '—' : n} contracts   auto · ${t.fmt('riskPerTrade')} risk`;
+      })()],
       ['Exit', t.fmt('cashoutAt')],
       ['Daily stop', t.fmt('dailyStopLoss') +
         (t.get('dailyStopLoss') != null ? `   today ${signed(t.day().realised)}` : '')],

@@ -10,7 +10,14 @@
  * order path is a money bug, so the guard belongs at the store.
  */
 
-const TYPE = { MONEY: 'money', CENTS: 'cents', INT: 'int', BOOL: 'bool', SECONDS: 'seconds' };
+const TYPE = {
+  MONEY: 'money',
+  CENTS: 'cents',       // 0..1 stored, typed and shown in cents
+  PCT: 'pct',           // 0..1 stored, typed and shown as a percentage
+  INT: 'int',
+  BOOL: 'bool',
+  SECONDS: 'seconds'
+};
 
 const SCHEMA = {
   // ── the four Bento asked for ──
@@ -22,6 +29,24 @@ const SCHEMA = {
       '$13.50.\n\n' +
       'Fixed size is also the one thing that cannot be talked into over-betting. Formula ' +
       'sizing multiplies a confidence error; this does not.'
+  },
+  autoShares: {
+    group: 'sizing', label: 'Auto size', type: TYPE.BOOL, def: false,
+    help: 'Let the bot pick the share count from your balance instead of using a fixed number.\n\n' +
+      'It sizes so that a trade at this bot\'s 80c CEILING still fits inside your risk share — ' +
+      'not at the 25c floor, because sizing against the cheapest possible entry is how a balance ' +
+      'that covers one cheap trade gets treated as sufficient and then every real signal is ' +
+      'refused for insufficient funds.\n\n' +
+      'It only ever sizes DOWN from what the balance can carry. It is not a way to bet more than ' +
+      'you have.'
+  },
+  riskPerTrade: {
+    group: 'sizing', label: 'Risk per trade', type: TYPE.PCT, def: 0.25, min: 0.01, max: 1,
+    help: 'With **Auto size** on, the share of your balance one position may cost. 25% means a ' +
+      'trade never costs more than a quarter of the account.\n\n' +
+      'This is the number that decides how a losing run feels. A binary bought at 70c loses the ' +
+      'whole stake, so at 25% four straight losses is the account — and this strategy has already ' +
+      'shown a single -$19.69 trade on a $100 paper book. Lower is slower and survives more.'
   },
   cashoutAt: {
     group: 'exits', label: 'Cash out at', type: TYPE.CENTS, def: null, nullable: true,
@@ -171,6 +196,9 @@ function coerce(key, raw) {
   // that is what the price arithmetic uses. Accepting 0.97 too, since somebody will type it.
   let v = n;
   if (spec.type === TYPE.CENTS) v = n > 1 ? n / 100 : n;
+  // Same shape as cents: 25 means 25%, and 0.25 is accepted too because somebody will type it.
+  // Without this branch the value stored was 25, and `balance * 25` is not a risk budget.
+  if (spec.type === TYPE.PCT) v = n > 1 ? n / 100 : n;
   if (spec.type === TYPE.INT || spec.type === TYPE.SECONDS) {
     if (!Number.isInteger(n)) return { ok: false, why: 'must be a whole number' };
   }
@@ -185,6 +213,7 @@ function coerce(key, raw) {
 
 function fmtBound(spec, v) {
   if (spec.type === TYPE.CENTS) return `${Math.round(v * 100)}c`;
+  if (spec.type === TYPE.PCT) return `${+(v * 100).toFixed(1)}%`;
   if (spec.type === TYPE.MONEY) return `$${v}`;
   if (spec.type === TYPE.SECONDS) return `${v}s`;
   return String(v);
@@ -197,6 +226,7 @@ function format(key, value) {
   if (value == null) return key === 'cashoutAt' ? 'hold to settlement' : 'off';
   switch (spec.type) {
     case TYPE.CENTS: return `${Math.round(Number(value) * 100)}c`;
+    case TYPE.PCT: return `${+(Number(value) * 100).toFixed(1)}%`;
     case TYPE.MONEY: return `$${Number(value).toFixed(2)}`;
     case TYPE.SECONDS: return `${Number(value)}s`;
     case TYPE.BOOL: return value ? 'on' : 'off';

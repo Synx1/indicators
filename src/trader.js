@@ -191,6 +191,54 @@ async function decideFor(coin) {
   };
 }
 
+/**
+ * The balance a size should be measured against.
+ *
+ * Live uses the real Kalshi cash; paper uses the configured bankroll plus what it has actually
+ * made, because a paper book that sizes off its starting figure forever is not simulating anything
+ * — it would bet the same on a doubled account as on a halved one.
+ */
+function liveOrPaperBalance(t) {
+  if (t.get('live')) {
+    const real = Number(t.rec.balance);
+    const cap = t.get('liveBankroll');
+    const bank = Number.isFinite(real) ? real : 0;
+    return cap != null ? Math.min(bank, Number(cap)) : bank;
+  }
+  const eq = book.equity(t.rec.book, {
+    start: Number(t.get('paperBankroll')) || 0,
+    liveOnly: false,
+    sinceMs: t.get('paperResetAt') == null ? null : Number(t.get('paperResetAt'))
+  });
+  return eq.free;
+}
+
+/**
+ * How many contracts to buy.
+ *
+ * Fixed by default. With autoShares on, sized so a trade at the bot's 80¢ CEILING still fits
+ * inside riskPerTrade of the balance — deliberately not at the price of THIS signal, because a
+ * size that only fits a 30¢ entry would be refused on the next 78¢ one and the account would trade
+ * erratically depending on what the book happened to offer.
+ *
+ * Floors to whole contracts. Kalshi does not sell fractions and rounding up is how an order becomes
+ * unaffordable by one contract.
+ */
+function sharesFor(t, d) {
+  const fixed = Math.floor(Number(t.get('shares')) || 0);
+  if (!t.get('autoShares')) return fixed;
+
+  const bank = liveOrPaperBalance(t);
+  const risk = Number(t.get('riskPerTrade'));
+  if (!(bank > 0) || !(risk > 0)) return 0;
+  const budget = bank * risk;
+  // Auto size DECIDES. An earlier version capped it at the fixed `shares` setting, reasoning that
+  // it should only ever size down — but `shares` has a default of 30, so that silently capped a
+  // $500 account at the same size as a $100 one and the risk dial looked broken. The safety here is
+  // riskPerTrade, plus maxOrderCost if one is set; a leftover default is not a safety rail.
+  return Math.floor(budget / MAX_PRICE);
+}
+
 // ── applying one decision to every account ──────────────────────
 
 /**
@@ -226,8 +274,19 @@ function accountBlock(t, d) {
     return `${openN} positions already open, at the ${maxOpen} limit`;
   }
 
-  const shares = Number(t.get('shares')) || 0;
-  if (!(shares >= 1)) return 'shares per trade is not set';
+  const shares = sharesFor(t, d);
+  if (!(shares >= 1)) {
+    // Auto size resolving to zero is a real answer, not a misconfiguration, so it says the
+    // arithmetic rather than "shares not set".
+    if (t.get('autoShares')) {
+      const bank = liveOrPaperBalance(t);
+      return `auto size works out to 0 contracts — ${users.money(bank)} at ` +
+        `${Math.round(Number(t.get('riskPerTrade')) * 100)}% risk is ` +
+        `${users.money(bank * Number(t.get('riskPerTrade')))} per trade, and one contract at ` +
+        `${MAX_PRICE * 100}¢ costs ${users.money(MAX_PRICE)}`;
+    }
+    return 'shares per trade is not set';
+  }
   const cost = +(shares * d.price).toFixed(2);
 
   const cap = t.get('maxOrderCost');
@@ -284,7 +343,9 @@ async function applyTo(t, d) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
 
-  const shares = Number(t.get('shares'));
+  // The SAME sizer the guard used, or auto size would decide whether a trade is allowed while the
+  // fixed number decided how big it is — the two disagreeing is a money bug.
+  const shares = sharesFor(t, d);
   const liveWanted = t.get('live');
   const block = liveWanted ? t.liveBlock() : null;
 
@@ -614,6 +675,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
+  sharesFor, liveOrPaperBalance,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,

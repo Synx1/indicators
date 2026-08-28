@@ -109,7 +109,10 @@ function armAck(interaction) {
  */
 async function ackUpdate(interaction) {
   if (interaction.replied || interaction.deferred) return;
-  await ackUpdate(interaction);
+  // interaction.deferUpdate(), NOT ackUpdate(). A blanket search-and-replace of deferUpdate calls
+  // rewrote this one too and made the function call itself — every button that went through here
+  // threw "Maximum call stack size exceeded", which is to say every button.
+  await interaction.deferUpdate();
 }
 
 async function handle(interaction) {
