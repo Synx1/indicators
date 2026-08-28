@@ -369,8 +369,102 @@ function byMarket(book, { liveOnly = null } = {}) {
     .sort((a, b) => b.net - a.net);
 }
 
+/**
+ * The equity curve, and the numbers you can only get from walking it.
+ *
+ * ── why the panel needed this ──
+ *
+ * It was showing the bankroll SETTING — a frozen number somebody typed — while the account had
+ * actually made or lost money against it. $100.00 on screen with $93.93 in the book is not a
+ * rounding disagreement, it is the screen describing a different quantity from the one that
+ * matters, and it is exactly the display-versus-execution split that made the other bot's sizing
+ * page untrustworthy.
+ *
+ * Peak equity and drawdown cannot be derived from the totals at all. `net` tells you where you
+ * ended; only the ORDER of the trades tells you the best you ever had and how far back you have
+ * come since. A book that is +$5 having been +$60 is a different situation from one that has
+ * climbed steadily to +$5, and the totals report them identically.
+ *
+ * `sinceMs` scopes the realised P&L to trades that closed at or after a baseline, which is what
+ * makes "set my paper balance to X" mean X now rather than X plus a lifetime of history.
+ */
+function equity(book, { start = 0, liveOnly = null, sinceMs = null } = {}) {
+  let closed = closedPositions(book);
+  if (liveOnly === true) closed = closed.filter(p => p.live);
+  if (liveOnly === false) closed = closed.filter(p => !p.live);
+  if (sinceMs != null) {
+    closed = closed.filter(p => p.exitAt && new Date(p.exitAt).getTime() >= sinceMs);
+  }
+  // Chronological by EXIT, because equity moves when a position realises, not when it opened.
+  // A position opened first and closed last belongs at the end of the curve.
+  closed.sort((a, b) => new Date(a.exitAt || 0) - new Date(b.exitAt || 0));
+
+  const base = Number(start) || 0;
+  let run = base;
+  let peak = base;
+  let trough = base;
+  let maxDd = 0;
+  const points = [base];
+  for (const p of closed) {
+    run += Number(p.pnl) || 0;
+    points.push(+run.toFixed(4));
+    if (run > peak) peak = run;
+    if (run < trough) trough = run;
+    const dd = peak - run;
+    if (dd > maxDd) maxDd = dd;
+  }
+
+  const opens = openPositions(book).filter(p => (liveOnly == null ? true : (liveOnly ? p.live : !p.live)));
+  const atRisk = +opens.reduce((a, p) => a + (Number(p.cost) || 0), 0).toFixed(2);
+
+  return {
+    start: +base.toFixed(2),
+    // Realised only. Open positions are money committed, not money made or lost yet.
+    realised: +(run - base).toFixed(2),
+    equity: +run.toFixed(2),
+    // Cash actually free to bet: equity less what is already committed to open positions. This is
+    // the number a sizer must use, or the same dollar gets allocated twice.
+    free: +(run - atRisk).toFixed(2),
+    peak: +peak.toFixed(2),
+    trough: +trough.toFixed(2),
+    /** How far below the best it has ever been. 0 when sitting at a new high. */
+    fromPeak: +(peak - run).toFixed(2),
+    /** The deepest peak-to-trough the curve actually took, which `net` cannot show. */
+    maxDrawdown: +maxDd.toFixed(2),
+    atRisk,
+    n: closed.length,
+    points
+  };
+}
+
+/**
+ * Realised P&L per ET day, oldest first, with a running total.
+ *
+ * Keyed on exit day, the same key todayStats uses, so the two can never disagree about which day
+ * a trade belongs to.
+ */
+function byDay(book, { liveOnly = null } = {}) {
+  let closed = closedPositions(book);
+  if (liveOnly === true) closed = closed.filter(p => p.live);
+  if (liveOnly === false) closed = closed.filter(p => !p.live);
+  const map = new Map();
+  for (const p of closed) {
+    if (!p.exitAt) continue;
+    const d = new Date(p.exitAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const e = map.get(d) || { day: d, net: 0, n: 0, wins: 0 };
+    e.net += Number(p.pnl) || 0; e.n++; if ((Number(p.pnl) || 0) > 0) e.wins++;
+    map.set(d, e);
+  }
+  const days = [...map.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
+  let cum = 0;
+  for (const d of days) { d.net = +d.net.toFixed(2); cum += d.net; d.cum = +cum.toFixed(2); }
+  return days;
+}
+
 module.exports = {
   CLOSE_OUTCOMES,
+  equity,
+  byDay,
   blank,
   normalise,
   open,

@@ -125,73 +125,106 @@ async function balanceFor(t) {
 function statusLine(t) {
   const live = t.get('live');
   if (gl.isKilled()) {
-    return { title: 'Halted', colour: 0xf87171,
-      text: 'The kill switch is on, so nothing will open for anybody.' };
+    return { badge: '🚨', title: 'Halted', colour: 0xf87171,
+      text: 'the kill switch is on, so nothing will open for anybody.' };
   }
   if (!live) {
-    return { title: 'Paper', colour: 0x5b9dff,
-      text: 'Every decision is recorded and priced. No order is sent.' };
+    return { badge: '📝', title: 'Paper', colour: 0x5b9dff,
+      text: 'every decision is recorded and priced at the real quote. No order is sent.' };
   }
   const block = t.liveBlock();
   if (!block) {
-    return { title: 'Live · armed', colour: 0x4ade80,
-      text: 'The next qualifying signal buys with real money.' };
+    return { badge: '🔴', title: 'Live and armed', colour: 0x4ade80,
+      text: 'the next qualifying signal buys with real money.' };
   }
-  return { title: 'Live · not trading', colour: 0xfbbf24, text: block };
+  return { badge: '🟡', title: 'Live, not trading', colour: 0xfbbf24, text: block };
 }
 
 async function mainPayload(t) {
   const bal = await balanceFor(t);
   const st = statusLine(t);
-  const open = book.openPositions(t.rec.book);
-  const all = book.stats(t.rec.book);
-  const todayBook = book.todayStats(t.rec.book);
-  const keyed = auth.isImported(t.userId);
   const live = t.get('live');
+  const b = t.rec.book;
+  const open = book.openPositions(b);
+  const all = book.stats(b, { liveOnly: live ? true : false });
+  const today = book.todayStats(b);
 
-  // The bankroll actually in play. Live is capped by the real balance — you cannot allocate
-  // money you do not hold — and showing the number typed rather than the number used is the
-  // display-versus-execution split that made the other bot's sizing screen untrustworthy.
-  const asked = live ? t.get('liveBankroll') : t.get('paperBankroll');
-  const ceiling = live ? (bal.dollars == null ? null : bal.dollars) : null;
-  const effective = live
-    ? (asked == null ? ceiling : (ceiling == null ? asked : Math.min(asked, ceiling)))
-    : asked;
-  const shortfall = live && asked != null && ceiling != null && ceiling < asked - 0.005;
+  // ── the bankroll is a LIVE figure, not the setting ──
+  //
+  // It showed the number somebody typed while the account had actually made or lost money against
+  // it: $100.00 on screen with $93.93 in the book. That is not a rounding disagreement, it is the
+  // screen describing a different quantity from the one that matters.
+  //
+  // Live is capped by the real Kalshi balance, because you cannot allocate money you do not hold;
+  // paper walks its own curve from the configured start.
+  const startBal = live ? t.get('liveBankroll') : t.get('paperBankroll');
+  const baseline = t.get('paperResetAt');
+  const eq = book.equity(b, {
+    start: Number(startBal) || 0,
+    liveOnly: live ? true : false,
+    sinceMs: live ? null : (baseline == null ? null : Number(baseline))
+  });
+  const ceiling = live && bal.dollars != null ? bal.dollars : null;
+  const shown = live
+    ? (ceiling == null ? eq.equity : Math.min(eq.equity, ceiling))
+    : eq.equity;
+  const capped = live && ceiling != null && eq.equity > ceiling + 0.005;
 
-  const atRisk = book.atRisk(t.rec.book);
   const e = new EmbedBuilder()
     .setColor(st.colour)
-    .setAuthor({ name: `${NAME} ${VERSION}` })
-    .setTitle(st.title)
-    .setDescription(st.text);
+    .setAuthor({ name: `${NAME} ${VERSION}  ·  ${live ? 'real money' : 'paper'}` })
+    .setTitle(`${money(shown)}      ${eq.realised === 0 ? '—' : signed(eq.realised)} all time`)
+    .setDescription(`${st.badge} **${st.title}** — ${st.text}`);
 
+  // ── the headline block: where the money is ──
   e.addFields({
-    name: live ? 'Real money' : 'Paper',
+    name: 'Balance',
     value: table([
-      ['Bankroll', effective == null ? '—' : money(effective) +
-        (shortfall ? `   (asked ${money(asked)}, you hold ${money(ceiling)})` : '')],
-      live && ['Kalshi balance', bal.dollars == null ? `—  ${bal.why || ''}` : money(bal.dollars)],
-      ['Today', `${signed(todayBook.net)}  on ${todayBook.n} closed`],
-      ['All time', `${signed(all.net)}  on ${all.n} closed${all.hit == null ? '' : `  ·  ${pct(all.hit)} won`}`],
-      atRisk > 0 && ['At risk now', money(atRisk)]
+      ['Equity', money(shown) + (capped ? `   (capped by your ${money(ceiling)} balance)` : '')],
+      ['Started at', money(eq.start)],
+      ['Realised', signed(eq.realised)],
+      eq.atRisk > 0 && ['Committed', `${money(eq.atRisk)} in ${open.length} open`],
+      eq.atRisk > 0 && ['Free to bet', money(eq.free)]
     ]),
     inline: false
   });
 
+  // ── performance: the three numbers that were missing ──
+  //
+  // `net` says where it ended. Only walking the curve gives the best it ever had and how far back
+  // it has come — a book at +$5 having been +$60 is a different situation from one that climbed
+  // steadily to +$5, and the totals report them identically.
   e.addFields({
-    name: `Open  ·  ${open.length}`,
-    value: open.length
-      ? table(open.slice(0, 6).map(p => [
-        `${p.sym} ${p.direction}`,
-        `${p.contracts}× @${p.priceCents}c   ${money(p.cost)}`
-      ])) + (open.length > 6 ? `…and ${open.length - 6} more` : '')
-      : '_nothing open_',
+    name: 'Performance',
+    value: table([
+      ['Today', `${signed(today.net)}   ${today.n} closed` +
+        (today.n ? `  ·  ${today.wins}W/${today.losses}L` : '')],
+      ['All time', `${signed(all.net)}   ${all.n} closed` +
+        (all.hit == null ? '' : `  ·  ${pct(all.hit)} won`)],
+      ['Peak equity', money(eq.peak) +
+        (eq.fromPeak > 0.005 ? `   ${signed(-eq.fromPeak)} from peak` : '   ← at a new high')],
+      eq.maxDrawdown > 0.005 && ['Worst drop', `${signed(-eq.maxDrawdown)} peak to trough`],
+      all.n > 0 && ['Fees paid', money(all.fees)]
+    ]) + (all.n >= 3 && all.hit != null
+      // Win rate is the one figure here with a denominator that cannot be exceeded, so it is the
+      // one a bar can honestly draw. Below three trades it would be drawing noise.
+      ? `${bar(all.hit)}  ${pct(all.hit)} of ${all.n} won\n` : ''),
     inline: false
   });
 
   e.addFields({
-    name: 'How it trades',
+    name: open.length ? `Open  ·  ${open.length}  ·  ${money(eq.atRisk)} at risk` : 'Open  ·  0',
+    value: open.length
+      ? table(open.slice(0, 6).map(p => [
+        `${p.sym} ${p.direction === 'UP' ? '▲' : '▼'}`,
+        `${p.contracts}× @${p.priceCents}¢   ${money(p.cost)}   closes ${String(p.closeTime).slice(11, 16)}`
+      ])) + (open.length > 6 ? `…and ${open.length - 6} more` : '')
+      : '_nothing open — it enters when a market clears every gate_',
+    inline: false
+  });
+
+  e.addFields({
+    name: 'Setup',
     value: table([
       ['Shares/trade', t.fmt('shares')],
       ['Exit', t.fmt('cashoutAt')],
@@ -205,25 +238,18 @@ async function mainPayload(t) {
   });
 
   if (gl.isKilled()) {
-    e.addFields({
-      name: '🚨 Kill switch is ON',
-      value: 'Nothing opens for anybody. Positions already held are still managed and settled.',
-      inline: false
-    });
+    e.addFields({ name: '🚨 Kill switch is ON',
+      value: 'Nothing opens for anybody. Anything held is still managed and settled.', inline: false });
   }
-  if (!keyed) {
+  if (!auth.isImported(t.userId)) {
     e.addFields({
       name: 'No Kalshi key — paper works anyway',
-      value: 'You do **not** need a key to use the bot. It is already scanning and recording ' +
-        'paper trades against your settings, and the P&L above is real bookkeeping on real ' +
-        'prices.\n\nA key is needed only to trade **real money**: press **Import key** with the ' +
-        'Key ID and the whole `.key` file from Kalshi → Account & security → API Keys. It is ' +
-        'proven against your account before it is trusted, so you find out immediately if the ' +
-        'pair is wrong.',
+      value: 'You do **not** need a key. It is already scanning and the P&L above is real ' +
+        'bookkeeping on real prices. A key buys one thing: **real money**.',
       inline: false
     });
   }
-  e.setFooter({ text: t.rec.tag ? `${t.rec.tag}${t.isOwner ? '  ·  owner' : ''}` : t.userId });
+  e.setFooter({ text: (t.rec.tag || t.userId) + (t.isOwner ? '  ·  owner' : '') });
   return { embeds: [e], components: mainComponents(t), flags: MessageFlags.Ephemeral };
 }
 
