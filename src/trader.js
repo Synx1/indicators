@@ -216,6 +216,16 @@ function accountBlock(t, d) {
       `window on ${sameWindow[0].sym} — same direction, same settlement, so it is one bet twice`;
   }
 
+  // The backstop on TOTAL exposure. The correlation rule above refuses a second bet in the same
+  // direction and window; this stops positions accumulating across DIFFERENT windows until the
+  // account is out of money mid-round and Kalshi starts refusing orders. bot.js had it as
+  // MAX_POS = 3 and it was not ported with the rest — this closes that gap.
+  const openN = book.openPositions(b).length;
+  const maxOpen = Number(t.get('maxOpen')) || 3;
+  if (openN >= maxOpen) {
+    return `${openN} positions already open, at the ${maxOpen} limit`;
+  }
+
   const shares = Number(t.get('shares')) || 0;
   if (!(shares >= 1)) return 'shares per trade is not set';
   const cost = +(shares * d.price).toFixed(2);
@@ -232,6 +242,22 @@ function accountBlock(t, d) {
   // guards against is the correlated one above going wrong anyway.
   if (bankroll != null && cost > Number(bankroll) * 0.5) {
     return `${users.money(cost)} is over half of the ${users.money(bankroll)} bankroll`;
+  }
+
+  // ── live: refuse what the account cannot pay for, rather than letting Kalshi refuse it ──
+  //
+  // The cached balance is CASH, so money already committed to open positions has left it — but a
+  // position opened earlier in this same pass has not settled into that figure yet, so at-risk is
+  // subtracted to be safe. Refusing here produces a sentence with two numbers in it; letting the
+  // order go produces an insufficient-funds rejection that says nothing about how far short it was.
+  if (live && t.rec.balance != null) {
+    const free = +(Number(t.rec.balance) - book.atRisk(b, { liveOnly: true })).toFixed(2);
+    if (cost > free) {
+      return `${users.money(cost)} for ${shares} at ${d.pricePct}¢ but only ` +
+        `${users.money(free)} is free (balance ${users.money(t.rec.balance)}` +
+        (openN ? `, ${users.money(book.atRisk(b, { liveOnly: true }))} committed to ${openN} open` : '') +
+        `). ${Math.floor(free / d.price)} contracts would fit.`;
+    }
   }
   return null;
 }

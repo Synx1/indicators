@@ -98,6 +98,15 @@ const SCHEMA = {
       'paper, so real money can only be trading because somebody armed it since the process ' +
       'started.'
   },
+  maxOpen: {
+    group: 'risk', label: 'Max positions open', type: TYPE.INT, def: 3, min: 1, max: 20,
+    help: 'The most positions that may be open at the same time.\n\n' +
+      'Carried over from the single-bankroll bot, where it was 3. It is the backstop on total ' +
+      'exposure: the correlation rule already refuses a second bet in the same direction and ' +
+      'settlement window, but nothing stopped positions accumulating ACROSS windows until the ' +
+      'account ran out of money mid-round and orders started being refused.\n\n' +
+      'Three at 80c is 2.4x one position. Raise it only if the balance can carry the arithmetic.'
+  },
   maxOrderCost: {
     group: 'risk', label: 'Max cost per order', type: TYPE.MONEY, def: null, nullable: true,
     min: 0.05, max: 100000,
