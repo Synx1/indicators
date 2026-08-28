@@ -18,6 +18,7 @@ const kt = require('./src/kalshitrade');
 const gl = require('./src/markets');
 const panel = require('./src/panel');
 const trader = require('./src/trader');
+const notify = require('./src/notify');
 
 const line = (...a) => console.log(...a);
 
@@ -342,6 +343,18 @@ client.once(Events.ClientReady, async c => {
 
   // Started after Discord so its log lines have somewhere to go and the banner is already out.
   // TRADER=off runs the panel alone, which is what iterating on the UI wants.
+  // The only delivery path notify has. It is handed a DM function and nothing else, so a
+  // position can never be posted to a channel — a structural fact rather than a convention.
+  notify.init({
+    log: line,
+    dm: async (userId, payload) => {
+      const user = await c.users.fetch(userId);
+      if (!user) return false;
+      await user.send(payload);
+      return true;
+    }
+  });
+
   if (process.env.TRADER === 'off') {
     line('  trader: OFF (TRADER=off) — panel only, no scanning');
   } else {

@@ -32,6 +32,7 @@ const users = require('./users');
 const book = require('./book');
 const kt = require('./kalshitrade');
 const auth = require('./kalshiauth');
+const notify = require('./notify');
 const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
 
 const axios = require('axios');
@@ -269,6 +270,7 @@ async function applyTo(t, d) {
       contracts: shares, priceCents: d.pricePct, price: d.price,
       cost: +(shares * d.price).toFixed(2), fee, live: false, requested: shares
     });
+    await notify.entry(t, p, { live: false });
     return { taken: true, live: false, position: p, why: block || 'paper' };
   }
 
@@ -295,6 +297,9 @@ async function applyTo(t, d) {
     : [];
   const contracts = got.reduce((a, f) => a + (Number(f.count) || 0), 0);
   if (!contracts) {
+    // Not a rejection and not a fault: the order was placed correctly and nobody sold into it.
+    // Said in those words, because the natural reading of silence here is "the bot is broken".
+    await notify.missedFill(t, d, { limitCents });
     return { taken: false, why: `no fill at ${limitCents}c — the book moved or nothing was offered` };
   }
   const centsTotal = got.reduce((a, f) => a + (Number(f.yes_price ?? f.price) || 0) * (Number(f.count) || 0), 0);
@@ -309,15 +314,185 @@ async function applyTo(t, d) {
     live: true, orderId: res.order && res.order.order_id,
     slippageCents: +(avgCents - d.pricePct).toFixed(2)
   });
+  await notify.entry(t, p, { live: true });
   return { taken: true, live: true, position: p, partial: contracts < shares };
+}
+
+// ── exits ───────────────────────────────────────────────────────
+//
+// Two ways a position ends. The user's cashout price, if they set one, or the exchange grading it
+// at the close. Nothing else closes a position: there is no stop, because on this entry band a
+// stop books the loss that the round would often have recovered, and holding to a fee-free
+// settlement is the measured default.
+
+/** How long after the close before "not graded yet" is worth mentioning once. */
+const SETTLE_NOTE_AFTER_MIN = 6;
+/** Positions this far past their close with no result are force-graded from the series list. */
+const FORCE_AFTER_MIN = 45;
+
+async function getMarket(ticker) {
+  try {
+    const { data } = await axios.get(`${KALSHI_API_BASE}/markets/${ticker}`, { timeout: 10000 });
+    return (data && data.market) || null;
+  } catch (_) { return null; }
+}
+
+/**
+ * The exchange's verdict for a ticker, or null while it is still unknown.
+ *
+ * Tries the market directly, then the series list, because the single-ticker fetch has been seen
+ * to fail for a market that the list still reports correctly. A position stuck open because ONE
+ * endpoint was unhappy is the failure this second lookup exists for.
+ */
+async function resultFor(p) {
+  const m = await getMarket(p.ticker);
+  if (m && m.result) return String(m.result).toLowerCase();
+  if (m && (m.status === 'finalized' || m.status === 'settled') && m.result) {
+    return String(m.result).toLowerCase();
+  }
+  const coin = gl.COINS.find(c => c.sym === p.sym);
+  if (!coin) return null;
+  try {
+    const { data } = await axios.get(
+      `${KALSHI_API_BASE}/markets?series_ticker=${coin.series}&status=settled&limit=50`,
+      { timeout: 12000 });
+    const hit = (data.markets || []).find(x => x.ticker === p.ticker);
+    if (hit && hit.result) return String(hit.result).toLowerCase();
+  } catch (_) { /* fall through: unknown is a valid answer, a wrong grade is not */ }
+  return null;
+}
+
+/** What this position could be SOLD at right now — the bid side for YES, 1-ask for NO. */
+function sellPrice(p, m) {
+  if (!m) return null;
+  if (p.side === 'YES') {
+    const bid = parseFloat(m.yes_bid_dollars);
+    return Number.isFinite(bid) && bid > 0 && bid <= 1 ? bid : null;
+  }
+  const ask = parseFloat(m.yes_ask_dollars);
+  // A MISSING ask must not read as a 100¢ sell price: `1 - 0` is 1.00, which would fire any
+  // cashout instantly on a price that does not exist. Absence of an offer is not a price.
+  return Number.isFinite(ask) && ask > 0 && ask <= 1 ? 1 - ask : null;
+}
+
+/** Close one position for one user, paper or live. */
+async function closePosition(t, p, sell, reason) {
+  const contracts = p.contracts;
+  const proceeds = +(contracts * sell).toFixed(4);
+  const exitFee = decide.fee(sell, contracts);
+
+  if (p.live) {
+    const client = kt.forUser(auth.forUser(t.userId));
+    const slip = Number(t.get('slippageCents')) || 0;
+    const limitCents = Math.max(1, Math.min(99, Math.round(sell * 100) - slip));
+    const res = await client.placeOrder({
+      ticker: p.ticker, side: p.side, action: 'sell',
+      count: contracts, limitCents, ioc: true, reduceOnly: true
+    });
+    if (!res.ok) return { sold: false, why: res.why };
+    await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
+    let f = null;
+    try { f = await client.fills({ ticker: p.ticker, limit: 50 }); } catch (_) { f = null; }
+    const got = (f && f.ok && Array.isArray(f.fills))
+      ? f.fills.filter(x => x.order_id === (res.order && res.order.order_id)) : [];
+    const n = got.reduce((a, x) => a + (Number(x.count) || 0), 0);
+    // A failed SELL is more serious than a failed buy: the position is STILL EXPOSED with the
+    // clock running. Reported as unsold so the next pass tries again.
+    if (!n) return { sold: false, why: `no fill at ${limitCents}¢ — still holding` };
+    const centsTotal = got.reduce((a, x) => a + (Number(x.yes_price ?? x.price) || 0) * (Number(x.count) || 0), 0);
+    const avg = centsTotal / n / 100;
+    const charged = got.reduce((a, x) => a + (Number(x.fee_cost_dollars ?? 0) || 0), 0);
+    const closed = book.close(t.rec.book, p, {
+      contracts: n, priceCents: Math.round(avg * 100), price: +avg.toFixed(4),
+      proceeds: +(n * avg).toFixed(4),
+      fee: charged > 0 ? +charged.toFixed(2) : kt.feeDollars(n, avg), reason
+    });
+    t.save(); t.noteRealised(closed.pnl);
+    return { sold: true, position: closed };
+  }
+
+  const closed = book.close(t.rec.book, p, {
+    contracts, priceCents: Math.round(sell * 100), price: +sell.toFixed(4),
+    proceeds, fee: exitFee, reason
+  });
+  t.save(); t.noteRealised(closed.pnl);
+  return { sold: true, position: closed };
+}
+
+/**
+ * Walk every account's open positions: cash out what has reached its target, settle what the
+ * exchange has graded, and force-grade anything left far too long.
+ */
+async function checkExits() {
+  const now = Date.now();
+  // One market fetch per TICKER, shared across every account holding it. Seven markets and five
+  // users must not be thirty-five identical requests.
+  const quotes = new Map();
+  const results = new Map();
+
+  for (const t of users.all()) {
+    const target = t.get('cashoutAt');
+    for (const p of book.openPositions(t.rec.book).slice()) {
+      const closeMs = p.closeMs || (p.closeTime ? new Date(p.closeTime).getTime() : 0);
+      const lateMin = closeMs ? (now - closeMs) / 60000 : -1;
+
+      // ── before the close: the cashout target, if there is one ──
+      if (lateMin < 0) {
+        if (target == null) continue;
+        if (!quotes.has(p.ticker)) quotes.set(p.ticker, await getMarket(p.ticker));
+        const m = quotes.get(p.ticker);
+        if (!m || String(m.status).toLowerCase() !== 'active') continue;
+        const sell = sellPrice(p, m);
+        if (sell == null || sell < Number(target)) continue;
+        const r = await closePosition(t, p, sell, 'CASHOUT');
+        if (r.sold) {
+          log(`  💰 ${t.rec.tag || t.userId}: cashed out ${p.sym} ${p.direction} ` +
+            `${Math.round(p.price * 100)}c → ${Math.round(sell * 100)}c  ${r.position.pnl >= 0 ? '+' : ''}${r.position.pnl}`);
+          await notify.cashout(t, r.position);
+        } else {
+          log(`  ${t.rec.tag || t.userId}: cashout failed on ${p.sym} — ${r.why}`);
+        }
+        continue;
+      }
+
+      // ── after the close: the exchange's verdict ──
+      if (!results.has(p.ticker)) results.set(p.ticker, await resultFor(p));
+      const result = results.get(p.ticker);
+
+      if (result !== 'yes' && result !== 'no') {
+        // Not graded yet. Said once, so silence is not mistaken for the bot losing the position.
+        if (lateMin >= SETTLE_NOTE_AFTER_MIN && !p.lateNoted) {
+          p.lateNoted = true; t.save();
+          await notify.awaitingSettlement(t, p, lateMin);
+          log(`  ⏳ ${p.sym} ${p.ticker} closed ${lateMin.toFixed(0)}m ago, no result yet`);
+        }
+        if (lateMin >= FORCE_AFTER_MIN) {
+          log(`  !! ${p.sym} ${p.ticker} is ${lateMin.toFixed(0)}m past close with no result — ` +
+            `leaving it open rather than guessing an outcome`);
+        }
+        continue;
+      }
+
+      const won = (p.side === 'YES' && result === 'yes') || (p.side === 'NO' && result === 'no');
+      const closed = book.settle(t.rec.book, p, won);
+      t.save(); t.noteRealised(closed.pnl);
+      log(`  ${won ? '✅' : '❌'} ${t.rec.tag || t.userId}: ${p.sym} ${p.direction} ` +
+        `@${p.priceCents}c → ${won ? '100' : '0'}c  ${closed.pnl >= 0 ? '+' : ''}${closed.pnl}`);
+      await notify.settled(t, closed, won);
+    }
+  }
 }
 
 // ── the loop ────────────────────────────────────────────────────
 
 async function runOnce() {
   stats.passes++;
-  stats.lastPass = new Date().toISOString();
   const accounts = users.all();
+
+  // Exits BEFORE entries. A position already carrying money is more urgent than a new one, and
+  // settling first also frees the correlation slot so the same window can be re-entered honestly.
+  try { await checkExits(); }
+  catch (e) { stats.lastError = `exits: ${e.message}`; log(`  !! exits pass failed: ${e.message}`); }
 
   for (const coin of gl.COINS) {
     let d;
@@ -347,6 +522,9 @@ async function runOnce() {
     // Spaced so seven markets do not arrive at Kalshi as a burst.
     await new Promise(r => setTimeout(r, 300));
   }
+  // Stamped at the END, so the panel's Scanner line means "a pass finished" rather than "a pass
+  // started" — a loop that wedges mid-pass must show as stale, not as healthy.
+  stats.lastPass = new Date().toISOString();
 }
 
 function start(opts = {}) {
@@ -368,6 +546,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   start, stop, runOnce, decideFor, applyTo, accountBlock,
+  checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MAX_SPOT_AGE_MS, POLL_MS
 };
