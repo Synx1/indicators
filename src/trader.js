@@ -249,15 +249,28 @@ function sharesFor(t, d) {
  */
 function accountBlock(t, d) {
   const b = t.rec.book;
+
+  // ── which book these guards may count ──
+  //
+  // This entry lands in the LIVE book only when the account is armed (see paperAllowed), so that is
+  // the book the three guards below are about. A paper position is not exposure — no money is at
+  // stake — and must not hold a live slot. book.js says exactly this about atRisk, and the
+  // free-cash check at the bottom already honours it; these three did not, so two paper positions
+  // left over from before an arm were quietly holding two of three live slots, and a signal in the
+  // same window as one of them would have been refused outright. Scoped, not removed: in paper mode
+  // the paper book guards itself the same way.
+  const willBeLive = !paperAllowed(t);
+  const mine = book.openPositions(b).filter(p => Boolean(p.live) === willBeLive);
+
   // One position per ticker per account: a second entry on the same round is not a second
   // opinion, it is the same bet twice at a worse average.
-  if (book.openOnTicker(b, d.market.ticker).length) return 'already holding this round';
+  if (mine.some(p => p.ticker === d.market.ticker)) return 'already holding this round';
 
   // Same-direction positions settling in the SAME window are one leveraged bet, not
   // diversification. bot.js learned this on 2026-08-26: DOGE, XRP and ETH all DOWN in the
   // 05:30 window lost together, $100 -> $35.62. An opposite-direction bet is still allowed
   // because it genuinely hedges.
-  const sameWindow = book.openPositions(b).filter(p =>
+  const sameWindow = mine.filter(p =>
     p.side === d.side && p.closeTime === d.market.close_time);
   if (sameWindow.length) {
     return `already ${d.direction} in the ${new Date(d.market.close_time).toISOString().slice(11, 16)} ` +
@@ -268,7 +281,7 @@ function accountBlock(t, d) {
   // direction and window; this stops positions accumulating across DIFFERENT windows until the
   // account is out of money mid-round and Kalshi starts refusing orders. bot.js had it as
   // MAX_POS = 3 and it was not ported with the rest — this closes that gap.
-  const openN = book.openPositions(b).length;
+  const openN = mine.length;
   const maxOpen = Number(t.get('maxOpen')) || 3;
   if (openN >= maxOpen) {
     return `${openN} positions already open, at the ${maxOpen} limit`;
