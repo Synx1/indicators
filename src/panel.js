@@ -101,8 +101,23 @@ const BAND_HI = 0.80;
  * account. The paper book has already produced a single -$19.69 trade, so this is not hypothetical.
  */
 const CONCENTRATION = 0.5;
+/**
+ * The share count that will ACTUALLY be used.
+ *
+ * t.get('shares') is the fixed setting, and with auto size on it is inert. Reading it here told
+ * somebody arming their account that one trade was 96% of their balance when the sizer had already
+ * resolved to 7 contracts — 22%. The panel's own Size row said "30 ignored, auto size decides (7
+ * right now)" two screens earlier, so the confirmation contradicted the settings page it came from.
+ *
+ * Required lazily: the trader pulls in the whole market stack and the panel must render without it.
+ */
+function resolvedShares(t) {
+  try { return require('./trader').sharesFor(t, { price: BAND_HI, pricePct: BAND_HI * 100 }); }
+  catch (_) { return Math.floor(Number(t.get('shares')) || 0); }
+}
+
 function affordability(t, bal) {
-  const shares = Number(t.get('shares')) || 0;
+  const shares = resolvedShares(t) || 0;
   const dollars = bal && bal.dollars != null ? Number(bal.dollars) : null;
   if (!shares || dollars == null || !(dollars > 0)) return null;
   const worst = +(shares * BAND_HI).toFixed(2);
@@ -287,8 +302,7 @@ async function mainPayload(t) {
         if (!t.get('autoShares')) return t.fmt('shares');
         // Auto size is arithmetic on a balance, so it has to show the ANSWER. A row reading
         // "auto" tells somebody nothing about how big their next trade is.
-        let n = null;
-        try { n = require('./trader').sharesFor(t, { price: 0.80, pricePct: 80 }); } catch (_) {}
+        const n = resolvedShares(t);
         return `${n == null ? '—' : n} contracts   auto · ${t.fmt('riskPerTrade')} risk`;
       })()],
       ['Exit', t.fmt('cashoutAt')],
@@ -613,7 +627,7 @@ function adminComponents() {
 }
 
 module.exports = {
-  NAME, VERSION, ID, init, owns, isOwner, affordability,
+  NAME, VERSION, ID, init, owns, isOwner, affordability, resolvedShares,
   mainPayload, mainComponents, settingsPayload, settingModal, keyModal, tradesPayload,
   adminPayload, adminComponents, table, bar,
   balanceFor, statusLine

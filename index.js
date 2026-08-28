@@ -380,12 +380,16 @@ async function dispatch(interaction) {
     // rejections. The cheapest entry this bot will take is 25c, so that is the floor to compare.
     const bal = await panel.balanceFor(t);
     const aff = panel.affordability(t, bal);
-    const shares = Number(t.get('shares')) || 0;
+    // The size that will actually be used, not the fixed setting auto size is overriding. Saying
+    // "buys 30 contracts" while the sizer had resolved 7 is the confirmation contradicting the
+    // settings screen it was launched from.
+    const shares = panel.resolvedShares(t) || 0;
+    const auto = t.get('autoShares') === true;
     const cheapest = aff ? aff.cheapest : +(shares * 0.25).toFixed(2);
     const short = Boolean(aff);
     return interaction.followUp({
-      content: `🔴 **Armed.** The next qualifying signal buys ${t.fmt('shares')} contracts with ` +
-        `real money.\n\n` +
+      content: `🔴 **Armed.** The next qualifying signal buys **${shares} contracts** with real ` +
+        `money` + (auto ? ` (auto size, ${t.fmt('riskPerTrade')} risk)` : '') + `.\n\n` +
         (aff && aff.kind === 'concentrated'
           ? `⚠️ One trade is **${aff.sharePct}% of your ${users.money(aff.dollars)}** — ` +
             `${shares} contracts costs up to ${users.money(aff.worst)} at 80¢. A binary loses the ` +
