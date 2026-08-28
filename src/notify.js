@@ -159,4 +159,25 @@ async function awaitingSettlement(t, p, lateMin) {
   return send(t.userId, { embeds: [e] });
 }
 
-module.exports = { init, entry, missedFill, cashout, settled, awaitingSettlement, readOf };
+/**
+ * Somebody was armed and a restart cleared it.
+ *
+ * Sent because the alternative is a user watching paper fills arrive on an account they armed and
+ * concluding the bot disarms itself at random. It is deliberate, it is a safety property, and it is
+ * worth one message to say so — silence here reads as a bug.
+ */
+async function forcedDisarm(userId) {
+  const e = base(0xfbbf24, '🔓 Disarmed by a restart',
+    'The bot restarted, and **arming never survives a restart** — so your account is back to paper.');
+  e.addFields({
+    name: '​',
+    value: 'That is deliberate rather than a fault: a crash loop, a redeploy or an unattended ' +
+      'reboot all come back in paper, so real money can only ever be trading because somebody ' +
+      'armed it since the process started.\n\nNothing was sold and nothing else changed. Run ' +
+      '`/dashboard` and press **Arm** when you are watching again.',
+    inline: false
+  });
+  return send(userId, { embeds: [e] });
+}
+
+module.exports = { init, forcedDisarm, entry, missedFill, cashout, settled, awaitingSettlement, readOf };

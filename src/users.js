@@ -136,6 +136,9 @@ function init(opts = {}) {
     log('  They must re-arm from /dashboard.');
   }
   log(`  users: ${Object.keys(store.users).length} loaded from ${FILE}`);
+  // Handed back so the caller can TELL the people it happened to. A disarm nobody is told about is
+  // indistinguishable from the bot disarming itself for no reason.
+  store.forcedDisarm = disarmed;
   return store;
 }
 

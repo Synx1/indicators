@@ -50,7 +50,7 @@ line('='.repeat(78));
 
 auth.init();
 gl.init({ log: line });
-users.init({ log: line });
+const store = users.init({ log: line });
 
 const client = new Client({
   // DM-only, so no guild intents and no message content. The panel never reads a message; it
@@ -425,6 +425,15 @@ client.once(Events.ClientReady, async c => {
   // cannot disagree with the Discord panel. The old server.js read state.json off disk, which is
   // one restart away from showing a stale file.
   site.start({ log: line });
+
+  // Told, not left to be inferred. Anybody the restart disarmed hears why, once, so paper fills
+  // arriving on an account they armed cannot read as the bot disarming itself.
+  for (const uid of (store.forcedDisarm || [])) {
+    notify.forcedDisarm(uid).catch(() => {});
+  }
+  if ((store.forcedDisarm || []).length) {
+    line(`  told ${store.forcedDisarm.length} user(s) they were disarmed by this restart`);
+  }
   line('  ready — DM the bot and run /dashboard');
 });
 

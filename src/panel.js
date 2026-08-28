@@ -423,20 +423,41 @@ function settingsPayload(t) {
     if (!keys.length) continue;
     e.addFields({
       name: label,
-      value: keys.map(k => `**${settings.SCHEMA[k].label}** — ${t.fmt(k)}`).join('\n'),
+      value: keys.map(k => {
+        // With auto size on, the fixed share count is inert. Printing it next to "Auto size — on"
+        // read as a contradiction, and reasonably so: two numbers, no clue which one is in force.
+        if (k === 'shares' && t.get('autoShares')) {
+          let n = null;
+          try { n = require('./trader').sharesFor(t, { price: 0.80, pricePct: 80 }); } catch (_) {}
+          return `**${settings.SCHEMA[k].label}** — ~~${t.fmt(k)}~~ ignored, auto size decides` +
+            (n == null ? '' : ` (**${n}** right now)`);
+        }
+        return `**${settings.SCHEMA[k].label}** — ${t.fmt(k)}`;
+      }).join('\n'),
       inline: false
     });
   }
-  // Four rows of five is Discord's limit; the schema is smaller than that, but slice anyway so
-  // adding a setting can never break the panel with an invalid payload.
-  const keys = Object.keys(settings.SCHEMA).slice(0, 20);
+  // visibleKeys(), not Object.keys(SCHEMA) — the latter offered `paperResetAt`, an internal
+  // millisecond timestamp, as a button somebody could be asked to type into.
+  //
+  // Four rows of five is Discord's limit; the schema is smaller, but slice anyway so adding a
+  // setting can never break the panel with an invalid payload.
+  const keys = settings.visibleKeys().slice(0, 20);
   const rows = [];
   for (let i = 0; i < keys.length; i += 5) {
     rows.push(new ActionRowBuilder().addComponents(
-      ...keys.slice(i, i + 5).map(k => new ButtonBuilder()
-        .setCustomId(`${ID}:set:${k}`)
-        .setLabel(settings.SCHEMA[k].label)
-        .setStyle(ButtonStyle.Secondary))
+      ...keys.slice(i, i + 5).map(k => {
+        const spec = settings.SCHEMA[k];
+        const isBool = spec.type === settings.TYPE.BOOL;
+        const on = isBool && t.get(k) === true;
+        return new ButtonBuilder()
+          .setCustomId(`${ID}:set:${k}`)
+          // A toggle carries its own state, so a press that registered is visible on the thing
+          // that was pressed rather than in a list above it.
+          .setLabel(isBool ? `${spec.label}: ${on ? 'ON' : 'off'}` : spec.label)
+          .setStyle(isBool ? (on ? ButtonStyle.Success : ButtonStyle.Secondary)
+            : ButtonStyle.Secondary);
+      })
     ));
   }
   rows.push(new ActionRowBuilder().addComponents(
