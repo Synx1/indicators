@@ -10,7 +10,10 @@ const {
   SlashCommandBuilder, MessageFlags, InteractionContextType
 } = require('discord.js');
 
-const { DISCORD_TOKEN, OWNER_ID, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR } = require('./src/config');
+const {
+  DISCORD_TOKEN, OWNER_ID, DATA_DIR, DATA_DIR_SOURCE,
+  KEY_DIR, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE, localRunBlocked
+} = require('./src/config');
 const users = require('./src/users');
 const settings = require('./src/settings');
 const auth = require('./src/kalshiauth');
@@ -43,10 +46,38 @@ if (DATA_DIR_SOURCE === 'repo-default') {
   line('     release, so books and settings will reset. Attach a volume.');
 }
 line(`  Keys       ${KEY_DIR}/users  (encrypted, one file per user, outside the repo)`);
+line(`             via ${KEY_DIR_SOURCE}${KEY_DIR_PERSISTENT ? '' : '  — !! REBUILT EVERY DEPLOY'}`);
+if (!KEY_DIR_PERSISTENT) {
+  line('  !! the key store is on a disk this platform rebuilds on every release. An imported');
+  line('     key will disappear at the next deploy, and the secret beside it is regenerated, so');
+  line('     the file could not be read even if it survived. Attach a volume.');
+}
 line(`  Key secret ${process.env.KALSHI_KEY_SECRET ? 'KALSHI_KEY_SECRET is set'
   : 'generated file beside the store — set KALSHI_KEY_SECRET to separate them'}`);
+line(`  Instance   ${INSTANCE}`);
 line(`  Owner      ${OWNER_ID}`);
 line('='.repeat(78));
+
+// ── one instance per token, or the panel answers from the wrong machine ─────────
+//
+// A laptop run and the deployment share one bot token. Discord hands each button press to
+// whichever session acknowledges first, so the panel can render here and be answered there: a key
+// imported on one is missing on the other, an Arm on one leaves the other's scanner filling paper,
+// and a fix appears to work half the time. That is a full afternoon and five commits, and none of
+// them could have worked. Refusing to start is the only version of this that cannot happen twice.
+if (localRunBlocked(process.env)) {
+  line('!! REFUSING TO START — this is not the deployment, and the deployment is using this token.');
+  line('');
+  line('   Two processes on one Discord token race for every button press, so half your clicks');
+  line('   would be answered by Railway and half by this laptop, each with its own book, its own');
+  line('   settings and its own key store. That is the bug that produced "the key does not save"');
+  line('   and "I armed it and it still fills paper".');
+  line('');
+  line('   To iterate on the panel here: stop the Railway service (or use a second bot token),');
+  line('   then run  ALLOW_LOCAL=1 npm start');
+  line('   To run without touching the market:  ALLOW_LOCAL=1 TRADER=off npm start');
+  process.exit(1);
+}
 
 auth.init();
 gl.init({ log: line });

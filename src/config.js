@@ -65,11 +65,88 @@ const DATA_DIR_SOURCE = process.env.STATE_DIR ? 'STATE_DIR'
  *
  * Its own directory rather than the other bot's: two bots sharing a key store means a bug in
  * either can destroy both, and while this one is being built the other is still running.
+ *
+ * ── it follows the volume, for the same reason the book does ──
+ *
+ * This was HOME-relative while DATA_DIR followed RAILWAY_VOLUME_MOUNT_PATH, which put the
+ * credential on the container filesystem the platform rebuilds on every release. Worse than
+ * losing it: masterKey() writes a NEW secret when it finds none, so the next deploy could not
+ * have read a surviving file either. The symptom arrived hours later as "the key doesn't save",
+ * pointing at the import, which had worked perfectly.
+ *
+ * So the same rule as the book: an explicit setting wins, otherwise the mounted volume, otherwise
+ * the home directory. `dataExists` is passed in rather than probed so the decision is testable —
+ * see test/keystore.test.js.
  */
-const KEY_DIR = process.env.KEY_DIR || path.join(os.homedir(), '.indicbot');
+function resolveKeyDir(env = process.env, home = os.homedir(), dataExists = false) {
+  // KALSHI_KEY_DIR first because kalshiauth.js reads that variable directly; if this disagreed
+  // with it, one of them would be writing where the other does not look.
+  if (env.KALSHI_KEY_DIR) return { dir: env.KALSHI_KEY_DIR, source: 'KALSHI_KEY_DIR', persistent: true };
+  if (env.KEY_DIR) return { dir: env.KEY_DIR, source: 'KEY_DIR', persistent: true };
+  if (env.RAILWAY_VOLUME_MOUNT_PATH) {
+    return { dir: path.join(env.RAILWAY_VOLUME_MOUNT_PATH, 'keys'), source: 'RAILWAY_VOLUME_MOUNT_PATH', persistent: true };
+  }
+  if (dataExists) return { dir: path.join('/data', 'keys'), source: '/data', persistent: true };
+  // A laptop. Kept exactly where it was, because a Kalshi private key can only be exported at the
+  // moment it is created and moving the default would orphan one.
+  //
+  // Deployed and landing HERE is the case that lost a key: no volume attached, so this is a
+  // container home directory that the next release rebuilds. It reports itself ephemeral rather
+  // than looking like every other successful write.
+  return { dir: path.join(home, '.indicbot'), source: 'home-default', persistent: !isDeployed(env) };
+}
+
+/**
+ * Whether this process is the deployment.
+ *
+ * Any RAILWAY_* variable, rather than one specific name, so the check does not quietly become
+ * false the day the platform renames something.
+ */
+function isDeployed(env = process.env) {
+  return Object.keys(env).some(k => k.startsWith('RAILWAY_'));
+}
+
+/**
+ * Whether this process must refuse to log into Discord.
+ *
+ * A laptop run and the deployment share one bot token, and Discord hands each button press to
+ * whichever session acknowledges first. The result is a panel that answers from a different
+ * machine than the one it rendered on: a key imported here is absent there, an Arm here leaves
+ * the scanner there filling paper, and every fix appears to work half the time. That cost five
+ * commits on 2026-08-28 before the two processes were noticed.
+ *
+ * ALLOW_LOCAL=1 is the deliberate override, for iterating on the panel with the deployment
+ * stopped — or with a second bot token, which is the safe way to do it.
+ */
+function localRunBlocked(env = process.env) {
+  if (isDeployed(env)) return false;
+  return String(env.ALLOW_LOCAL || '') !== '1';
+}
+
+const keyStore = resolveKeyDir(process.env, os.homedir(), fs.existsSync('/data'));
+const KEY_DIR = keyStore.dir;
+const KEY_DIR_SOURCE = keyStore.source;
+const KEY_DIR_PERSISTENT = keyStore.persistent;
+
+/**
+ * Which process this is, in one short string.
+ *
+ * Printed at boot and put on the panel footer. When two instances shared a token, every symptom
+ * was "the panel contradicts itself" and there was no way to tell that consecutive replies had
+ * come from different machines. Now the reply says which one it is, so that is a glance rather
+ * than an afternoon.
+ */
+const INSTANCE = [
+  isDeployed(process.env) ? (process.env.RAILWAY_SERVICE_NAME || 'railway') : `local:${os.hostname().split('.')[0]}`,
+  (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || null,
+  `pid${process.pid}`
+].filter(Boolean).join('·');
 
 module.exports = {
   loadEnvFile,
+  resolveKeyDir,
+  isDeployed,
+  localRunBlocked,
 
   // ── Discord ──
   // Required to run the bot. Absent is a clear startup error, not a crash halfway through.
@@ -87,6 +164,9 @@ module.exports = {
   DATA_DIR,
   DATA_DIR_SOURCE,
   KEY_DIR,
+  KEY_DIR_SOURCE,
+  KEY_DIR_PERSISTENT,
+  INSTANCE,
 
   // ── web ──
   PORT: Number(process.env.PORT || 3000),

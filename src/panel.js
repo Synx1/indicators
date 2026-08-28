@@ -28,7 +28,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags
 } = require('discord.js');
 
-const { OWNER_ID } = require('./config');
+const { OWNER_ID, INSTANCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT } = require('./config');
 const settings = require('./settings');
 const users = require('./users');
 const book = require('./book');
@@ -367,7 +367,13 @@ async function mainPayload(t) {
     e.addFields({
       name: 'No Kalshi key — paper works anyway',
       value: 'You do **not** need a key. It is already scanning and the P&L above is real ' +
-        'bookkeeping on real prices. A key buys one thing: **real money**.',
+        'bookkeeping on real prices. A key buys one thing: **real money**.' +
+        // Said BEFORE the import rather than after it disappears. An import onto a disk the
+        // platform rebuilds looks identical to a successful one until the next release.
+        (KEY_DIR_PERSISTENT ? '' :
+          '\n\n⚠️ **Importing one will not stick right now** — the key store is on a disk this ' +
+          `deploy rebuilds (\`${KEY_DIR_SOURCE}\`). Attach a volume first, or the key vanishes at ` +
+          'the next release.'),
       inline: false
     });
   } else {
@@ -382,6 +388,7 @@ async function mainPayload(t) {
       value: table([
         ['Key ID', String(st2.keyId || auth.maskedKeyId(t.userId) || '—')],
         ['Imported', st2.importedAt ? new Date(st2.importedAt).toLocaleString() : '—'],
+        ['Stored', `${KEY_DIR_SOURCE}${KEY_DIR_PERSISTENT ? '' : '  — REBUILT EVERY DEPLOY'}`],
         ['Linked to', t.rec.tag ? `${t.rec.tag}  (${t.userId})` : t.userId],
         ['Balance', bal.dollars == null ? `— ${bal.why || 'not read yet'}`
           : dust ? `${money(exact)}  — under a cent, so this account is effectively empty`
@@ -394,7 +401,9 @@ async function mainPayload(t) {
       inline: false
     });
   }
-  e.setFooter({ text: (t.rec.tag || t.userId) + (t.isOwner ? '  ·  owner' : '') });
+  // The instance that answered, because two of them once shared a token and every symptom read as
+  // the panel contradicting itself. If two footers ever differ, that is the whole diagnosis.
+  e.setFooter({ text: (t.rec.tag || t.userId) + (t.isOwner ? '  ·  owner' : '') + `  ·  ${INSTANCE}` });
   return { embeds: [e], components: mainComponents(t), flags: MessageFlags.Ephemeral };
 }
 

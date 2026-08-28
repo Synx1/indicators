@@ -25,7 +25,9 @@ const users = require('./users');
 const book = require('./book');
 const gl = require('./markets');
 const activity = require('./activity');
-const { WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE } = require('./config');
+const {
+  WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE
+} = require('./config');
 
 const NAME = 'Indicators';
 
@@ -64,7 +66,13 @@ function publicState() {
       net: +net.toFixed(2), fees: +fees.toFixed(2),
       open, atRisk: +atRisk.toFixed(2)
     },
-    storage: { dataDir: DATA_DIR, source: DATA_DIR_SOURCE },
+    // The key store is reported alongside the book because it is the half that was silently
+    // ephemeral. `keys` is a SOURCE and a boolean, never a path with a credential in it.
+    storage: {
+      dataDir: DATA_DIR, source: DATA_DIR_SOURCE,
+      keys: KEY_DIR_SOURCE, keysPersistent: KEY_DIR_PERSISTENT
+    },
+    instance: INSTANCE,
     skips: activity.skipCounts()
   };
 }
