@@ -179,21 +179,10 @@ async function balanceFor(t) {
     const client = kt.forUser(auth.forUser(t.userId));
     const b = await client.balance();
     if (b && b.ok && b.dollars != null) {
-      rec.balance = b.dollars;
-      rec.balanceExact = b.exact != null ? b.exact : b.dollars;
-      rec.balanceAt = new Date().toISOString();
-      // ── the per-shard split, kept because the TOTAL cannot back an order ──
-      //
-      // Kalshi holds cash per exchange shard and checks an order against the shard the market
-      // lives on: "Programmatic traders must preallocate collateral on a given exchange shard
-      // before order placement." Crypto is shard 2. An account with $24.17 on shard 0 and 2c on
-      // shard 2 has a $24.19 balance and cannot buy one contract — which is exactly the
-      // "400 insufficient balance" that followed the shard record being created.
-      if (Array.isArray(b.breakdown)) {
-        rec.balanceShards = {};
-        for (const row of b.breakdown) rec.balanceShards[String(row.index)] = row.dollars;
-      }
-      t.save();
+      // users.noteBalance is the only writer of these fields, so the trader's copy of the balance
+      // and this one cannot drift — including the per-shard split, which is what an order's
+      // collateral is actually checked against.
+      users.noteBalance(t, b);
       return {
         dollars: b.dollars, exact: rec.balanceExact, cached: false,
         breakdown: b.breakdown, shards: rec.balanceShards || null

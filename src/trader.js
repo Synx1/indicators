@@ -714,9 +714,44 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+/**
+ * How stale an armed account's balance may be before the trader re-reads it.
+ *
+ * Nothing but the Discord panel ever refreshed a balance, so an armed account that nobody had
+ * opened the panel for sized itself off a figure from whenever it was last looked at — or off
+ * nothing at all. Auto sizing and the free-cash guard both read it, so a stale balance is a wrong
+ * size and a guard that cannot fire. Once a minute per armed account is one request a minute.
+ */
+const BAL_REFRESH_MS = 60000;
+
+/**
+ * Re-read the balance of every armed account whose copy has gone stale.
+ *
+ * Only armed accounts: a paper account sizes off its paper book and asking Kalshi about it would be
+ * a request per pass for a number nothing uses. Failures are ignored on purpose — a balance that
+ * cannot be read leaves the previous one in place, and the guards treat a missing balance as
+ * "unknown" rather than "zero".
+ */
+async function refreshBalances(accounts) {
+  const due = accounts.filter(t =>
+    t.get('live') && t.get('armed') && auth.isImported(t.userId) &&
+    (!t.rec.balanceAt || (Date.now() - new Date(t.rec.balanceAt).getTime()) > BAL_REFRESH_MS));
+  if (!due.length) return;
+  await mapLimit(due, ACCOUNT_CONCURRENCY, async t => {
+    const b = await kt.forUser(auth.forUser(t.userId)).balance();
+    if (b && b.ok) users.noteBalance(t, b);
+    else log(`  balance for ${t.rec.tag || t.userId} unreadable: ${b && b.why}`);
+  });
+}
+
 async function runOnce() {
   stats.passes++;
   const accounts = users.all();
+
+  // Before any sizing decision, so the size and the affordability guard are computed against a
+  // balance from this minute rather than from whenever somebody last opened the panel.
+  try { await refreshBalances(accounts); }
+  catch (e) { log(`  !! balance refresh failed: ${e.message}`); }
 
   // Exits BEFORE entries. A position already carrying money is more urgent than a new one, and
   // settling first also frees the correlation slot so the same window can be re-entered honestly.
@@ -805,7 +840,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
-  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash,
+  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash, refreshBalances,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,

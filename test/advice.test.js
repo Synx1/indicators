@@ -70,6 +70,8 @@ lacks(one({ balanceShards: null, cryptoShard: 2 }), 'wrong-shard',
   'no breakdown read yet is not a finding either — silence beats a guess');
 lacks(one({ balanceShards: { '0': 24.88, '2': 0.02 }, cryptoShard: 2, live: false }), 'wrong-shard',
   'a paper account spends no collateral on any shard');
+has(one({ balanceShards: { '0': 24.88, '2': 0.02 }, cryptoShard: 2, shares: 0 }), 'wrong-shard',
+  'and it still fires when auto size has resolved to 0 — which is what a starved shard causes');
 
 // ── a daily stop that can never trip ────────────────────────────
 has(one({ dailyStop: 20 }), 'stop-too-big', 'a $20 stop on a $24.90 account stops nothing');

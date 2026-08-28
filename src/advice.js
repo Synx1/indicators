@@ -114,7 +114,9 @@ function forAccount(a) {
     const here = Number(a.balanceShards[String(a.cryptoShard)]) || 0;
     const total = Object.values(a.balanceShards).reduce((x, v) => x + (Number(v) || 0), 0);
     const elsewhere = +(total - here).toFixed(2);
-    if (elsewhere > 1 && here < shares * BAND_LO) {
+    // Math.max(shares, 1): with auto size resolving to 0 on a starved shard the multiplication
+    // would be 0 and the rule would go quiet in exactly the case it exists for.
+    if (elsewhere > 1 && here < Math.max(shares, 1) * BAND_LO) {
       add('high', 'wrong-shard',
         `${money(here)} of a ${money(total)} balance is on exchange shard ${a.cryptoShard}, which ` +
         'is where the 15-minute crypto markets trade. Kalshi checks each order against that ' +

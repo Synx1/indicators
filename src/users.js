@@ -211,6 +211,35 @@ function tenant(userId, { create = false } = {}) {
   return t;
 }
 
+/**
+ * Record a balance read onto a user record — the ONE writer of these fields.
+ *
+ * The panel refreshes a balance when somebody opens it; the trader refreshes one before it sizes an
+ * armed account. Two writers with two copies of this logic is how the panel and the trader end up
+ * disagreeing about the same fact, which is the shape of nearly every bug this bot has had. So both
+ * call this.
+ *
+ * `balanceShards` is the per-exchange-shard split. Kalshi checks an order's collateral against the
+ * shard its market lives on, so the total is not the spendable figure and both callers need the
+ * breakdown, not just the sum.
+ */
+function noteBalance(t, b) {
+  if (!t || !b || !b.ok || b.dollars == null) return false;
+  const rec = t.rec;
+  rec.balance = b.dollars;
+  rec.balanceExact = b.exact != null ? b.exact : b.dollars;
+  rec.balanceAt = new Date().toISOString();
+  if (Array.isArray(b.breakdown)) {
+    const byShard = {};
+    for (const row of b.breakdown) {
+      if (row && row.index != null) byShard[String(row.index)] = Number(row.dollars) || 0;
+    }
+    rec.balanceShards = byShard;
+  }
+  save();
+  return true;
+}
+
 function all() {
   return Object.keys(store.users).map(id => tenant(id)).filter(Boolean);
 }
@@ -223,4 +252,6 @@ function touch(userId, tag) {
   save();
 }
 
-module.exports = { init, tenant, all, touch, save, flush, validId, today, money, FILE };
+module.exports = {
+  init, tenant, all, touch, save, flush, validId, today, money, noteBalance, FILE
+};
