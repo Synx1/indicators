@@ -83,6 +83,29 @@ function scannerLine() {
     (st.lastError ? `   last error: ${String(st.lastError).slice(0, 40)}` : '')];
 }
 
+/**
+ * Can this account actually afford the size it is configured for?
+ *
+ * Judged at the bot's 80¢ CEILING rather than its 25¢ floor. Sizing against the floor is how a
+ * balance that covers exactly one cheap entry gets reported as sufficient, and then every real
+ * signal — most of which price 60-80¢ — is refused for insufficient funds.
+ *
+ * Returns null when there is nothing to say: no key, no balance read, or the size fits.
+ */
+const BAND_LO = 0.25;
+const BAND_HI = 0.80;
+function affordability(t, bal) {
+  const shares = Number(t.get('shares')) || 0;
+  const dollars = bal && bal.dollars != null ? Number(bal.dollars) : null;
+  if (!shares || dollars == null) return null;
+  const worst = +(shares * BAND_HI).toFixed(2);
+  if (dollars >= worst) return null;
+  const cheapest = +(shares * BAND_LO).toFixed(2);
+  // Whole contracts only — a fraction of a contract is not a thing Kalshi sells.
+  const fits = Math.floor(dollars / BAND_HI);
+  return { shares, dollars, worst, cheapest, fits, anyFit: dollars >= cheapest };
+}
+
 let ctx = null;
 function init(context) { ctx = context || {}; return true; }
 
@@ -250,6 +273,25 @@ async function mainPayload(t) {
     inline: false
   });
 
+  const aff = live ? affordability(t, bal) : null;
+  if (aff) {
+    e.addFields({
+      name: aff.anyFit ? '⚠️  Your size only fits the cheapest entries' : '⚠️  Your size is unaffordable',
+      value: table([
+        ['Balance', money(aff.dollars)],
+        ['Your size', `${aff.shares} contracts`],
+        ['Needs', `${money(aff.cheapest)} at 25¢  …  ${money(aff.worst)} at 80¢`],
+        ['Fits', aff.fits >= 1 ? `${aff.fits} contracts across the whole band` : 'nothing at 80¢']
+      ]) +
+      (aff.anyFit
+        ? `_Most signals price 60–80¢, so orders above ${money(aff.dollars)} will be refused for ` +
+          `insufficient funds. Set **Shares per trade** to **${Math.max(1, aff.fits)}** to trade ` +
+          `the whole band, or fund the account._`
+        : `_No order can fill at this size. Set **Shares per trade** to **${Math.max(1, aff.fits)}** ` +
+          `or fund the account._`),
+      inline: false
+    });
+  }
   if (gl.isKilled()) {
     e.addFields({ name: '🚨 Kill switch is ON',
       value: 'Nothing opens for anybody. Anything held is still managed and settled.', inline: false });
@@ -497,7 +539,7 @@ function adminComponents() {
 }
 
 module.exports = {
-  NAME, VERSION, ID, init, owns, isOwner,
+  NAME, VERSION, ID, init, owns, isOwner, affordability,
   mainPayload, mainComponents, settingsPayload, settingModal, keyModal, tradesPayload,
   adminPayload, adminComponents, table, bar,
   balanceFor, statusLine

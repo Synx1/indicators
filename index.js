@@ -361,17 +361,19 @@ async function dispatch(interaction) {
     // places will be refused by Kalshi — so it is said here rather than discovered as a stream of
     // rejections. The cheapest entry this bot will take is 25c, so that is the floor to compare.
     const bal = await panel.balanceFor(t);
+    const aff = panel.affordability(t, bal);
     const shares = Number(t.get('shares')) || 0;
-    const cheapest = +(shares * 0.25).toFixed(2);
-    const short = bal.dollars != null && bal.dollars < cheapest;
+    const cheapest = aff ? aff.cheapest : +(shares * 0.25).toFixed(2);
+    const short = Boolean(aff);
     return interaction.followUp({
       content: `🔴 **Armed.** The next qualifying signal buys ${t.fmt('shares')} contracts with ` +
         `real money.\n\n` +
         (short
-          ? `⚠️ Your Kalshi balance is **${users.money(bal.dollars)}**, and ${shares} contracts ` +
-            `costs at least **${users.money(cheapest)}** even at this bot's cheapest 25¢ entry. ` +
-            `Every live order will be refused for insufficient funds until the account is ` +
-            `funded — paper keeps running either way.\n\n`
+          ? `⚠️ Your balance is **${users.money(aff.dollars)}** and ${shares} contracts costs ` +
+            `**${users.money(aff.cheapest)}** at 25¢ up to **${users.money(aff.worst)}** at 80¢. ` +
+            `Most signals price 60–80¢, so those orders will be refused for insufficient funds. ` +
+            `Set **Shares per trade** to **${Math.max(1, aff.fits)}** to trade the whole band, or ` +
+            `fund the account — paper keeps running either way.\n\n`
           : '') +
         `Arming does not survive a restart — a redeploy or a crash brings you back in paper.`,
       flags: MessageFlags.Ephemeral
