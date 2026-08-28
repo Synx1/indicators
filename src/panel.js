@@ -63,6 +63,26 @@ function bar(frac, slots = 12) {
   return '█'.repeat(n) + '░'.repeat(slots - n);
 }
 
+/**
+ * Is the scanner actually running, and when did it last look?
+ *
+ * The panel could not answer the first question anybody asks — "is it on" — which meant the only
+ * way to know was reading a log file. `lastPass` is the honest signal: a process can be alive
+ * with a wedged loop, so this reports when a pass last COMPLETED rather than whether the module
+ * loaded. Required lazily so the panel still renders with TRADER=off.
+ */
+function scannerLine() {
+  let st = null;
+  try { st = require('./trader').stats; } catch (_) { return ['Scanner', 'unavailable']; }
+  if (!st || !st.lastPass) return ['Scanner', 'starting…'];
+  const ageS = Math.round((Date.now() - new Date(st.lastPass).getTime()) / 1000);
+  // Two poll intervals of silence means the loop is not turning, whatever the process is doing.
+  const stale = ageS > 45;
+  return ['Scanner', `${stale ? '⚠️ last pass ' : 'ok · '}${ageS}s ago` +
+    `   ${st.decisions} signal${st.decisions === 1 ? '' : 's'}, ${st.entries} filled` +
+    (st.lastError ? `   last error: ${String(st.lastError).slice(0, 40)}` : '')];
+}
+
 let ctx = null;
 function init(context) { ctx = context || {}; return true; }
 
@@ -178,7 +198,8 @@ async function mainPayload(t) {
       ['Daily stop', t.fmt('dailyStopLoss') +
         (t.get('dailyStopLoss') != null ? `   today ${signed(t.day().realised)}` : '')],
       ['Markets', `${gl.enabledSyms().length}/${gl.SYMS.length} on` +
-        (gl.enabledSyms().length === gl.SYMS.length ? '' : `   off: ${gl.SYMS.filter(x => !gl.isEnabled(x)).join(' ')}`)]
+        (gl.enabledSyms().length === gl.SYMS.length ? '' : `   off: ${gl.SYMS.filter(x => !gl.isEnabled(x)).join(' ')}`)],
+      scannerLine()
     ]),
     inline: false
   });
@@ -192,10 +213,13 @@ async function mainPayload(t) {
   }
   if (!keyed) {
     e.addFields({
-      name: '⚠️  No Kalshi key yet',
-      value: 'Live trading needs one. **Import key** below — the Key ID and the whole `.key` ' +
-        'file from Kalshi → Account & security → API Keys. It is proven against your account ' +
-        'before it is trusted.',
+      name: 'No Kalshi key — paper works anyway',
+      value: 'You do **not** need a key to use the bot. It is already scanning and recording ' +
+        'paper trades against your settings, and the P&L above is real bookkeeping on real ' +
+        'prices.\n\nA key is needed only to trade **real money**: press **Import key** with the ' +
+        'Key ID and the whole `.key` file from Kalshi → Account & security → API Keys. It is ' +
+        'proven against your account before it is trusted, so you find out immediately if the ' +
+        'pair is wrong.',
       inline: false
     });
   }
