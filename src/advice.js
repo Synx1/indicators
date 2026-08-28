@@ -31,6 +31,8 @@ const CONCENTRATION = 0.5;
 const STOP_SHARE = 0.8;
 /** Below this many closed trades a market's P&L is noise, not a verdict. */
 const MARKET_MIN_N = 5;
+/** A rejection older than this is history rather than a live problem. */
+const REJECT_FRESH_MIN = 60;
 
 const money = n => `${Number(n) < 0 ? '-' : ''}$${Math.abs(Number(n) || 0).toFixed(2)}`;
 const RANK = { high: 0, warn: 1, note: 2 };
@@ -48,6 +50,27 @@ function forAccount(a) {
 
   const shares = Number(a.shares) || 0;
   const bal = a.balance == null ? null : Number(a.balance);
+
+  // ── an order the exchange refused, which outranks every configuration question ──
+  //
+  // Armed, signals qualifying, and every order bouncing is the worst state this bot has: with paper
+  // off while armed, nothing is being recorded either, so the experience is a bot that does nothing
+  // and says nothing. It carries Kalshi's own words rather than "order failed", because the fix
+  // depends entirely on which refusal it is.
+  const rej = a.lastReject;
+  if (rej && rej.why) {
+    const at = new Date(rej.at).getTime();
+    const now = a.now ? new Date(a.now).getTime() : Date.now();
+    const mins = Number.isFinite(at) ? Math.round((now - at) / 60000) : null;
+    if (mins != null && mins <= REJECT_FRESH_MIN) {
+      add('high', 'order-rejected',
+        `Kalshi refused the last live order${rej.sym ? ` on ${rej.sym}` : ''}` +
+        `${mins <= 1 ? ' just now' : ` ${mins} minutes ago`}` +
+        `${rej.status ? ` (${rej.status})` : ''}: ${rej.why}`,
+        'Nothing is at risk — the order never entered the book. It will repeat on every signal ' +
+        'until it is resolved; disarm if you would rather keep collecting paper results.');
+    }
+  }
 
   // ── credentials first: they invalidate everything below them ──
   if (a.armed && !a.keyed && a.keyFile) {
@@ -147,5 +170,5 @@ function review(accounts = [], opts = {}) {
 
 module.exports = {
   review, forAccount, forFleet,
-  BAND_LO, BAND_HI, CONCENTRATION, STOP_SHARE, MARKET_MIN_N
+  BAND_LO, BAND_HI, CONCENTRATION, STOP_SHARE, MARKET_MIN_N, REJECT_FRESH_MIN
 };

@@ -368,6 +368,24 @@ function paperAllowed(t) {
   return !(t.get('live') && t.get('armed'));
 }
 
+/**
+ * One DM per distinct rejection reason per half hour.
+ *
+ * The same refusal arrives on every signal on every market — seven an hour is a notification the
+ * user stops reading, which defeats the point of sending it at all. A CHANGED reason is news and
+ * goes out immediately.
+ */
+const REJECT_DM_MS = 30 * 60 * 1000;
+const rejectSeen = new Map();
+function rejectIsNew(userId, why) {
+  const sig = String(why || '').slice(0, 120);
+  const prev = rejectSeen.get(userId);
+  const now = Date.now();
+  if (prev && prev.sig === sig && (now - prev.at) < REJECT_DM_MS) return false;
+  rejectSeen.set(userId, { sig, at: now });
+  return true;
+}
+
 async function applyTo(t, d) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
@@ -403,7 +421,15 @@ async function applyTo(t, d) {
     ticker: d.market.ticker, side: d.side, action: 'buy',
     count: shares, limitCents, ioc: true
   });
-  if (!res.ok) return { taken: false, why: `order rejected: ${res.why}` };
+  if (!res.ok) {
+    // A rejection is not a market condition. It repeats on every signal until something changes, and
+    // with paper off while armed nothing is being recorded in the meantime — so it is recorded on the
+    // account, DM'd once, and surfaced by advice.js rather than living in a log line.
+    t.rec.lastReject = { why: res.why, sym: d.sym, at: new Date().toISOString(), status: res.status || null };
+    t.save();
+    if (rejectIsNew(t.userId, res.why)) await notify.orderRejected(t, d, res.why);
+    return { taken: false, why: `order rejected: ${res.why}` };
+  }
 
   // Wait the user's grace, then read what actually filled. Never assume the order filled at the
   // limit: a partial at a worse average is the normal case and recording the ask as the fill is

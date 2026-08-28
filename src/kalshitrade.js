@@ -187,6 +187,33 @@ function describeError(err, label) {
     return { status, why: `Kalshi rejected the request as invalid (400)${apiMsg ? `: ${apiMsg}` : ''}` };
   }
   if (status === 429) return { status, why: 'rate limited by Kalshi (429)' };
+  if (status === 404) {
+    const m = String(apiMsg || '');
+    // ── the two 404s mean opposite things, and one of them is not our fault ──
+    //
+    // Kalshi runs the order book across four shards (exchange_index 0-3). A market exists on one
+    // of them, and an ACCOUNT has to exist there too. "user not found" therefore means the market
+    // was located and the account was not — the key is valid, the balance reads fine, and no field
+    // in the request can fix it. Diagnosed 2026-08-28 against KXETH15M: shards 0 and 1 answered
+    // "market not found", shards 2, 3 and auto-routing answered "user not found", while an order
+    // on a market that lives on shard 1 was ACCEPTED with the same key seconds earlier.
+    if (/user not found/i.test(m)) {
+      return {
+        status, accountShard: true,
+        why: 'Kalshi has no account record on the exchange shard this market trades on ' +
+          '(404 "user not found"). The key is fine — balance and fills read normally, and orders ' +
+          'on markets that live on another shard are accepted. Nothing in the request can change ' +
+          'it: exchange_index 0-3 were all tried. Placing one trade by hand on this market in the ' +
+          'Kalshi app is what creates the missing record.'
+      };
+    }
+    if (/market not found/i.test(m)) {
+      return { status, why: `${label}: Kalshi says that market does not exist on the shard the ` +
+        'request was routed to (404 "market not found"). Let it auto-route by leaving ' +
+        'exchange_index unset, or check the ticker.' };
+    }
+    return { status, why: `${label} failed: 404 ${m || 'not found'}` };
+  }
   return { status: status || null, why: `${label} failed: ${apiMsg || err.message}` };
 }
 

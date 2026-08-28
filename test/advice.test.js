@@ -83,6 +83,26 @@ has(one({ paperOpen: 2 }), 'paper-settling', 'two paper positions still to settl
 lacks(one({ paperOpen: 2, armed: false }), 'paper-settling',
   'paper positions in paper mode are just the book');
 
+// ── an order Kalshi refused ─────────────────────────────────────
+// The loudest thing that can be wrong: armed, signals qualifying, and every order bounced. With
+// paper off while armed, nothing is being recorded either, so silence here is total.
+const rejected = one({
+  lastReject: {
+    why: 'Kalshi has no account record on the exchange shard this market trades on',
+    sym: 'ETH', at: '2026-08-28T22:50:00Z', status: 404
+  },
+  now: '2026-08-28T22:55:00Z'
+});
+has(rejected, 'order-rejected', 'a rejection five minutes ago');
+eq(rejected[0].severity, 'high', 'and it outranks everything else');
+assert.ok(/shard/.test(rejected.find(f => f.code === 'order-rejected').text),
+  'carrying the reason Kalshi gave, not a generic failure'); checks++;
+lacks(one({
+  lastReject: { why: 'transient', sym: 'ETH', at: '2026-08-28T18:00:00Z', status: 404 },
+  now: '2026-08-28T22:55:00Z'
+}), 'order-rejected', 'a rejection five hours ago is history, not a finding');
+lacks(one({}), 'order-rejected', 'and an account that has never been refused hears nothing');
+
 // ── fleet: the market that loses money ──────────────────────────
 const fleet = advice.review([ok], {
   day: '2026-08-28',

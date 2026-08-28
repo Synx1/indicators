@@ -144,6 +144,28 @@ async function missedFill(t, d, { limitCents, nowCents = null }) {
   return send(t.userId, { embeds: [e] });
 }
 
+/**
+ * An order Kalshi REFUSED. Not the same event as a missed fill, and it must not be silent.
+ *
+ * A missed fill means the bot did everything right and nobody sold. A rejection means the order
+ * never entered the book, so the reason is on our side or the exchange's — and it will repeat on
+ * every signal until somebody changes something. Left in the log, it is experienced as "I armed it
+ * and it takes no trades", which is exactly how it was reported on 2026-08-28.
+ */
+async function orderRejected(t, d, why) {
+  const e = base(0xf87171, '⛔ Kalshi refused the order',
+    `**${d.sym} ${arrow(d.direction)}** at ${cents(d.price)} — the order was never placed, so ` +
+    'nothing is at risk and nothing was bought.');
+  e.addFields({
+    name: '​',
+    value: `${why}\n\n_This will repeat on every signal until it is resolved. Paper is off while ` +
+      'you are armed, so nothing is being recorded in the meantime — press **Disarm** if you would ' +
+      'rather keep collecting paper results._',
+    inline: false
+  });
+  return send(t.userId, { embeds: [e] });
+}
+
 // ── exits ───────────────────────────────────────────────────────
 
 /** Sold early, at the user's cashout price. */
@@ -222,6 +244,6 @@ async function forcedDisarm(userId) {
 }
 
 module.exports = {
-  init, forcedDisarm, entry, missedFill, cashout, settled, awaitingSettlement, readOf,
+  init, forcedDisarm, entry, missedFill, orderRejected, cashout, settled, awaitingSettlement, readOf,
   pending, drain
 };

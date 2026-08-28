@@ -632,6 +632,7 @@ function adminPayload() {
       shares: resolvedShares(t) || 0,
       dailyStop: t.get('dailyStopLoss'),
       todayRealised: t.day().realised,
+      lastReject: t.rec.lastReject || null,
       paperOpen: opens.filter(p => !p.live).length,
       liveOpen: opens.filter(p => p.live).length,
       atRiskLive: book.atRisk(b, { liveOnly: true }),
