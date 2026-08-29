@@ -36,6 +36,7 @@ const gl = require('./markets');
 const auth = require('./kalshiauth');
 const kt = require('./kalshitrade');
 const advice = require('./advice');
+const licences = require('./licences');
 
 const NAME = 'Indicators';
 const VERSION = 'v0.1';
@@ -146,6 +147,26 @@ function affordability(t, bal) {
     anyFit: dollars >= cheapest, safer: Math.max(1, fits) };
 }
 
+/**
+ * How much access is left, in the words that matter at each stage.
+ *
+ * Null for the owner — an owner row reading "unlimited" is noise on every render. Under three days
+ * it says the date as well as the count, because "2 days" on its own is the kind of thing somebody
+ * reads on Friday and forgets by Sunday.
+ */
+function accessRow(t) {
+  const left = t.accessLeftMs();
+  if (!Number.isFinite(left)) return null;           // the owner
+  if (left <= 0) return null;                        // the status line already leads with this
+  const days = left / 86400000;
+  const until = new Date(t.rec.accessUntil).toLocaleString();
+  if (days <= 3) {
+    return ['Access', `${days < 1 ? `${Math.ceil(left / 3600000)} hour(s)` : `${Math.ceil(days)} day(s)`} left` +
+      `   ⚠️ ends ${until} — a new key extends it`];
+  }
+  return ['Access', `${Math.floor(days)} day(s) left   until ${until}`];
+}
+
 let ctx = null;
 function init(context) { ctx = context || {}; return true; }
 
@@ -199,10 +220,19 @@ function statusLine(t) {
   // Before anything about live or paper: an account nobody has enabled is not trading either way,
   // and a panel that shows "Paper — every decision is recorded" to somebody whose decisions are
   // being discarded is simply wrong.
-  if (!t.isApproved()) {
-    return { badge: '⏳', title: 'Waiting to be enabled', colour: 0xfbbf24,
-      text: 'the owner has to switch your account on before anything trades. You can look around ' +
-        'and set things up in the meantime — nothing is acted on yet, not even paper.' };
+  if (!t.hasAccess()) {
+    if (t.rec.blocked === true) {
+      return { badge: '⛔', title: 'Blocked', colour: 0xf87171,
+        text: 'the owner has switched this account off. Nothing trades, and a key will not change ' +
+          'that until the block is lifted.' };
+    }
+    const had = Boolean(t.rec.accessUntil);
+    return { badge: '🔑', title: had ? 'Access expired' : 'Key required', colour: 0xfbbf24,
+      text: had
+        ? `access ran out ${new Date(t.rec.accessUntil).toLocaleString()}. Nothing trades until a ` +
+          'new key is entered — **Enter key** below.'
+        : 'this bot runs on access keys. Press **Enter key** and paste the one you were given — ' +
+          'until then nothing is acted on, not even paper.' };
   }
   if (gl.isKilled()) {
     return { badge: '🚨', title: 'Halted', colour: 0xf87171,
@@ -294,6 +324,9 @@ async function mainPayload(t) {
       ['Realised', signed(eq.realised)],
       shardShort && ['Usable here', `${money(shardCash)}   ⚠️ crypto trades on shard ` +
         `${CRYPTO_SHARD}; the rest of your balance is on another shard and cannot back an order`],
+      // Their own clock, on the screen they already look at. A subscription that expires silently
+      // looks exactly like a bot that stopped working.
+      accessRow(t),
       eq.atRisk > 0 && ['Committed', `${money(eq.atRisk)} in ${open.length} open`],
       eq.atRisk > 0 && ['Free to bet', money(eq.free)]
     ]),
@@ -447,15 +480,15 @@ async function mainPayload(t) {
     });
   } else if (!keyed) {
     e.addFields({
-      name: t.isApproved() ? 'No Kalshi key — paper works anyway' : 'No Kalshi key — nothing to do yet',
+      name: t.hasAccess() ? 'No Kalshi key — paper works anyway' : 'No Kalshi key — nothing to do yet',
       // The copy has to follow the gate. Telling somebody "it is already scanning and the P&L above
       // is real bookkeeping" while their account is switched off is simply untrue, and it is the
       // kind of untrue that reads as the bot being broken later.
-      value: (t.isApproved()
+      value: (t.hasAccess()
         ? 'You do **not** need a key. It is already scanning and the P&L above is real ' +
           'bookkeeping on real prices. A key buys one thing: **real money**.'
-        : 'Nothing is being recorded yet — your account is waiting to be enabled by the owner. ' +
-          'You can import a key now if you want to be ready, but it changes nothing until then.') +
+        : 'Nothing is being recorded yet — this account has no access key on the clock. You can ' +
+          'import a Kalshi key now to be ready, but it changes nothing until access starts.') +
         // Said BEFORE the import rather than after it disappears. An import onto a disk the
         // platform rebuilds looks identical to a successful one until the next release.
         (KEY_DIR_PERSISTENT ? '' :
@@ -500,7 +533,7 @@ async function mainPayload(t) {
 function mainComponents(t) {
   const live = t.get('live'), armed = t.get('armed');
   const keyed = auth.isImported(t.userId);
-  const approved = t.isApproved();
+  const approved = t.hasAccess();
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${ID}:arm`)
@@ -519,6 +552,9 @@ function mainComponents(t) {
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${ID}:settings`).setLabel('Settings').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${ID}:trades`).setLabel('Trades').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${ID}:access`)
+      .setLabel(approved ? 'Extend access' : 'Enter key')
+      .setStyle(approved ? ButtonStyle.Secondary : ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`${ID}:key`)
       .setLabel(keyed ? 'Replace key' : 'Import key')
       .setStyle(keyed ? ButtonStyle.Secondary : ButtonStyle.Primary)
@@ -592,6 +628,54 @@ function settingModal(t, key) {
     .setRequired(false)
     .setPlaceholder(`now: ${t.fmt(key)}${spec.nullable ? '  ·  blank to turn off' : ''}`.slice(0, 100));
   return m.addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+/**
+ * Where a user pastes the access key they were given.
+ *
+ * Short, one field, and the placeholder shows the shape — the commonest failure with a code like
+ * this is not knowing whether the dashes are part of it. normalise() accepts it either way.
+ */
+function accessModal() {
+  return new ModalBuilder()
+    .setCustomId(`${ID}:accessmodal`)
+    .setTitle('Enter your access key')
+    .addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('accesskey')
+        .setLabel('Access key')
+        .setPlaceholder('IND-XXXX-XXXX-XXXX')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(40)
+    ));
+}
+
+/** The owner's custom-length key. Presets cover 1/7/30; this is for everything else. */
+function generateModal() {
+  return new ModalBuilder()
+    .setCustomId(`${ID}:genmodal`)
+    .setTitle('Generate an access key')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('days')
+          .setLabel('How many days of access?')
+          .setPlaceholder('e.g. 14')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(4)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('note')
+          .setLabel('Note to yourself (who is it for?)')
+          .setPlaceholder('optional — shown only to you')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(100)
+      )
+    );
 }
 
 function keyModal() {
@@ -671,8 +755,11 @@ function adminPayload() {
       shares: resolvedShares(t) || 0,
       dailyStop: t.get('dailyStopLoss'),
       todayRealised: t.day().realised,
-      approved: t.isApproved(),
-      pending: !t.isApproved(),
+      approved: t.hasAccess(),
+      pending: !t.hasAccess(),
+      accessUntil: t.rec.accessUntil || null,
+      blocked: t.rec.blocked === true,
+      accessLeftMs: t.accessLeftMs(),
       lastReject: t.rec.lastReject || null,
       balanceShards: t.rec.balanceShards || null,
       // Crypto is shard 2 in Kalshi's own sharding doc, and every market this bot trades is crypto.
@@ -683,7 +770,7 @@ function adminPayload() {
       liveNet: liveSt.net, paperNet: paperSt.net,
       liveN: liveSt.n, paperN: paperSt.n,
       liveToday: liveEq.todayNet,
-      state: !t.isApproved() ? 'OFF' :
+      state: !t.hasAccess() ? 'OFF' :
         gl.isKilled() ? 'halted' : !t.get('live') ? 'paper' : t.get('armed') ? 'ARMED' : 'live'
     };
   });
@@ -712,22 +799,36 @@ function adminPayload() {
     .setAuthor({ name: `${NAME} ${VERSION} · owner` })
     .setTitle(gl.isKilled() ? 'Halted — kill switch on' : `${all.length} account(s), ${armedN} armed`);
 
-  // ── who is waiting to be let in ──
+  // ── access, above the money ──
   //
-  // First, above the money: somebody who has found the bot and cannot use it is the most
-  // time-sensitive thing on this screen, and they cannot tell whether they are queued or ignored.
-  const waiting = snaps.filter(x => x.pending);
-  if (waiting.length) {
-    e.addFields({
-      name: `⏳ Waiting to be enabled  ·  ${waiting.length}`,
-      value: waiting.map(x =>
-        `**${x.who}** — joined ${x.t.rec.createdAt ? new Date(x.t.rec.createdAt).toLocaleString() : '—'}` +
-        `${x.keyed ? ', key imported' : ', no key yet'}`
-      ).join('\n') + '\n\n_Press the green button below to enable. Nothing trades for them until ' +
-      'you do — not even paper._',
-      inline: false
-    });
-  }
+  // Who is on the clock, who has run out, and which keys are still in your pocket. First because a
+  // person who cannot use the bot is the most time-sensitive thing on this screen, and because an
+  // unused key sitting in the store is money not yet collected.
+  const spare = licences.unused();
+  const withAccess = snaps.filter(x => x.accessLeftMs > 0 && !x.blocked);
+  const without = snaps.filter(x => x.accessLeftMs <= 0 || x.blocked);
+  const accessRows = [
+    ...withAccess.map(x => [x.who,
+      // The owner has no clock, and rendering Infinity days "until 12/31/1969" is how a screen
+      // teaches somebody to distrust every other number on it.
+      !Number.isFinite(x.accessLeftMs) ? 'owner — no key needed'
+        : `${Math.floor(x.accessLeftMs / 86400000)}d left   until ` +
+          `${new Date(x.accessUntil).toLocaleDateString()}`]),
+    ...without.map(x => [x.who,
+      x.blocked ? 'BLOCKED by you'
+        : x.accessUntil ? `expired ${new Date(x.accessUntil).toLocaleDateString()}`
+          : 'never entered a key'])
+  ];
+  e.addFields({
+    name: `🔑 Access  ·  ${withAccess.length} active  ·  ${spare.length} key(s) unused`,
+    value: table(accessRows.length ? accessRows : [['—', 'no accounts yet']]) +
+      (spare.length
+        ? '**Unused keys**\n' + spare.slice(0, 6).map(k =>
+          `\`${k.key}\`  ${k.days}d${k.note ? ` · ${k.note}` : ''}`).join('\n') +
+          (spare.length > 6 ? `\n_…and ${spare.length - 6} more_` : '')
+        : '_No unused keys. Generate one below._'),
+    inline: false
+  });
 
   // ── what to look at, before what happened ──
   //
@@ -807,10 +908,10 @@ function adminComponents() {
   if (others.length) {
     rows.push(new ActionRowBuilder().addComponents(
       ...others.map(x => {
-        const on = x.rec.approved === true;
+        const on = x.rec.blocked !== true;
         return new ButtonBuilder()
           .setCustomId(`${ID}:${on ? 'no' : 'ok'}:${x.userId}`)
-          .setLabel(`${on ? '⛔' : '✅'} ${(x.rec.tag || x.userId).slice(0, 14)}`)
+          .setLabel(`${on ? '⛔ block' : '✅ unblock'} ${(x.rec.tag || x.userId).slice(0, 9)}`)
           .setStyle(on ? ButtonStyle.Secondary : ButtonStyle.Success);
       })
     ));
@@ -826,6 +927,13 @@ function adminComponents() {
         .setStyle(gl.isEnabled(sym) ? ButtonStyle.Success : ButtonStyle.Secondary))
     ));
   }
+  // Key generation, one press per common length. `genx` opens a box for anything else.
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${ID}:gen:1`).setLabel('+ 1 day key').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`${ID}:gen:7`).setLabel('+ 7 day key').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`${ID}:gen:30`).setLabel('+ 30 day key').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`${ID}:genx`).setLabel('+ custom…').setStyle(ButtonStyle.Secondary)
+  ));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${ID}:kill`)
       .setLabel(gl.isKilled() ? 'Lift kill switch' : 'KILL SWITCH')
@@ -833,12 +941,17 @@ function adminComponents() {
     new ButtonBuilder().setCustomId(`${ID}:admin`).setLabel('Refresh').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${ID}:home`).setLabel('◀ Back').setStyle(ButtonStyle.Primary)
   ));
-  return rows.slice(0, 5);
+  // Discord allows five rows. The controls row is the one that must never be dropped — losing the
+  // kill switch and Back to a layout overflow would be a silent, dangerous regression as accounts
+  // or markets grow — so it is kept and the optional rows are what get trimmed.
+  const controls = rows.pop();
+  return [...rows.slice(0, 4), controls];
 }
 
 module.exports = {
   NAME, VERSION, ID, init, owns, isOwner, affordability, resolvedShares,
   mainPayload, mainComponents, settingsPayload, settingModal, keyModal, tradesPayload,
+  accessModal, generateModal,
   adminPayload, adminComponents, table, bar,
   balanceFor, statusLine
 };

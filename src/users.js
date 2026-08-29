@@ -63,9 +63,18 @@ function blankUser(id) {
     // panel, hold a paper book and read its own balance from the moment it appears, but nothing
     // trades — paper or live — until the owner enables it. Default false, and the owner is exempt
     // because somebody has to be able to approve the first account.
-    approved: false,
-    approvedAt: null,
-    approvedBy: null
+    // ── access, and who may trade ──
+    //
+    // `accessUntil` is bought with a key (see src/licences.js) and is the whole gate: no key, no
+    // trading, not even paper. `blocked` is the owner's override for one account, independent of
+    // whatever time is left on it — a key grants, a block denies, and the two never argue because
+    // the block wins.
+    accessUntil: null,
+    accessKey: null,
+    accessDays: 0,
+    blocked: false,
+    // Set when a lapse has been announced, so the DM goes once rather than every pass.
+    lapseToldAt: null
   };
 }
 
@@ -202,21 +211,49 @@ function tenant(userId, { create = false } = {}) {
       return day;
     },
     /**
-     * Whether the owner has enabled this account to trade at all.
-     *
-     * The owner is approved implicitly: the alternative is a bot that cannot approve its own first
-     * account. Everybody else waits for a press.
+     * Milliseconds of access left, or 0. The owner has no clock.
      */
-    isApproved() {
-      return userId === OWNER_ID || rec.approved === true;
+    accessLeftMs(now = Date.now()) {
+      if (userId === OWNER_ID) return Infinity;
+      if (!rec.accessUntil) return 0;
+      const until = new Date(rec.accessUntil).getTime();
+      return Number.isFinite(until) ? Math.max(0, until - now) : 0;
     },
-    /** Enable or disable an account. Only ever called from an owner-gated path. */
-    setApproved(on, byUserId) {
-      rec.approved = Boolean(on);
-      rec.approvedAt = rec.approved ? new Date().toISOString() : null;
-      rec.approvedBy = rec.approved ? String(byUserId || '') : null;
+    /**
+     * Whether this account may trade at all.
+     *
+     * The owner is exempt: somebody has to be able to run the bot, and a key that locks out the
+     * person who generates keys is a bot that can brick itself. Everybody else needs time on the
+     * clock and no block.
+     */
+    hasAccess(now = Date.now()) {
+      if (rec.blocked === true) return false;
+      return t.accessLeftMs(now) > 0;
+    },
+    /**
+     * Add days of access, extending from whatever is left rather than from now.
+     *
+     * Resetting to `now + days` would confiscate the remainder of a period somebody already had,
+     * which is not a rounding difference — it is taking back what was paid for.
+     */
+    grantAccess(days, key, now = Date.now()) {
+      const d = Math.floor(Number(days));
+      if (!(d >= 1)) return { ok: false, why: 'days must be at least 1' };
+      const current = rec.accessUntil ? new Date(rec.accessUntil).getTime() : 0;
+      const from = Number.isFinite(current) && current > now ? current : now;
+      const until = new Date(from + d * 86400000).toISOString();
+      rec.accessUntil = until;
+      rec.accessKey = key ? String(key) : rec.accessKey;
+      rec.accessDays = (Number(rec.accessDays) || 0) + d;
+      rec.lapseToldAt = null;
       save();
-      return rec.approved;
+      return { ok: true, until, days: d, extended: from > now };
+    },
+    /** The owner's per-account override. A block denies regardless of time remaining. */
+    setBlocked(on) {
+      rec.blocked = Boolean(on);
+      save();
+      return rec.blocked;
     },
     /** Why this account cannot open a live position, or null when it can. */
     liveBlock() {

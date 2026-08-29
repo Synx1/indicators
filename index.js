@@ -15,6 +15,7 @@ const {
   KEY_DIR, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE, localRunBlocked
 } = require('./src/config');
 const users = require('./src/users');
+const licences = require('./src/licences');
 const settings = require('./src/settings');
 const auth = require('./src/kalshiauth');
 const kt = require('./src/kalshitrade');
@@ -81,6 +82,7 @@ if (localRunBlocked(process.env)) {
 
 auth.init();
 gl.init({ log: line });
+licences.init({ log: line });
 const store = users.init({ log: line });
 
 const client = new Client({
@@ -186,6 +188,19 @@ async function handle(interaction) {
   }
 }
 
+/**
+ * How a fresh key is handed over.
+ *
+ * On its own line in a code block, because the owner is about to copy it into a message to somebody
+ * and a key wrapped in prose gets copied with a trailing full stop. Ephemeral everywhere it is used:
+ * a key visible in a channel is a key anybody can spend.
+ */
+function keyMessage(r) {
+  return `🔑 **New access key — ${r.days} day(s)**\n\`\`\`\n${r.key}\n\`\`\`\n` +
+    'Single use, and the clock starts when it is redeemed rather than now — so an unused key does ' +
+    'not go stale. Send it to one person; the first account to enter it owns it.';
+}
+
 async function dispatch(interaction) {
   // Enforced as well as declared: a stale guild-scoped registration or a component on a message
   // that ended up in a channel would both land here.
@@ -214,6 +229,13 @@ async function dispatch(interaction) {
   // ── modals first: showModal cannot follow a defer ──
   if (interaction.isButton()) {
     if (id === `${panel.ID}:key`) return interaction.showModal(panel.keyModal());
+    if (id === `${panel.ID}:access`) return interaction.showModal(panel.accessModal());
+    if (id === `${panel.ID}:genx`) {
+      if (!t.isOwner) {
+        return interaction.reply({ content: '🔒 That control is owner-only.', flags: MessageFlags.Ephemeral });
+      }
+      return interaction.showModal(panel.generateModal());
+    }
     if (id.startsWith(`${panel.ID}:set:`)) {
       const key = id.slice(`${panel.ID}:set:`.length);
       // Unknown OR hidden: the boundary explains either as a stale control.
@@ -236,6 +258,34 @@ async function dispatch(interaction) {
   }
 
   if (interaction.isModalSubmit()) {
+    // ── redeem an access key ──
+    if (id === `${panel.ID}:accessmodal`) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const typed = interaction.fields.getTextInputValue('accesskey');
+      const r = licences.redeem(typed, t.userId);
+      if (!r.ok) return interaction.editReply({ content: `❌ ${r.why}` });
+      const g = t.grantAccess(r.days, r.key);
+      if (!g.ok) return interaction.editReply({ content: `❌ ${g.why}` });
+      return interaction.editReply({
+        content: `✅ **Access granted — ${r.days} day(s).**\n` +
+          `Runs until **${new Date(g.until).toLocaleString()}**` +
+          (g.extended ? ' (added to the time you already had).' : '.') +
+          '\n\nRun `/dashboard` again. It starts as **paper**; a Kalshi key, **Go live** and ' +
+          '**Arm** are what make it real money.'
+      });
+    }
+    // ── generate a key for somebody, owner only ──
+    if (id === `${panel.ID}:genmodal`) {
+      if (!t.isOwner) {
+        return interaction.reply({ content: '🔒 Owner-only.', flags: MessageFlags.Ephemeral });
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const days = interaction.fields.getTextInputValue('days');
+      const note = interaction.fields.getTextInputValue('note');
+      const r = licences.generate({ days, byUserId: t.userId, note });
+      if (!r.ok) return interaction.editReply({ content: `❌ ${r.why}` });
+      return interaction.editReply({ content: keyMessage(r) });
+    }
     if (id === `${panel.ID}:keymodal`) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const keyId = interaction.fields.getTextInputValue('keyid').trim();
@@ -364,19 +414,36 @@ async function dispatch(interaction) {
     if (!subject) {
       return interaction.reply({ content: '❌ No such account.', flags: MessageFlags.Ephemeral });
     }
-    subject.setApproved(on, t.userId);
+    // `ok` unblocks, `no` blocks. A block denies regardless of the time left on their key, and
+    // lifting it does not extend anything — the clock kept running while they were out.
+    subject.setBlocked(!on);
     await ackUpdate(interaction);
     await interaction.editReply(panel.adminPayload());
-    // Told, not left to be discovered. Somebody waiting has no way to know the switch was flipped.
-    if (on) notify.enabled(subject).catch(() => {});
+    if (on && subject.hasAccess()) notify.enabled(subject).catch(() => {});
+    const left = subject.accessLeftMs();
     return interaction.followUp({
       content: on
-        ? `✅ **${subject.rec.tag || subjectId}** is enabled. Their signals will be acted on from ` +
-          'the next pass — as paper until they press Go live and Arm themselves.'
-        : `⛔ **${subject.rec.tag || subjectId}** is disabled. Nothing new opens for them; anything ` +
-          'already open is still managed and settled.',
+        ? `✅ **${subject.rec.tag || subjectId}** is unblocked. ` +
+          (left > 0
+            ? `They have ${Math.ceil(left / 86400000)} day(s) of access left, so they are trading ` +
+              'again from the next pass.'
+            : 'They still have no access key on the clock, so nothing trades until they enter one.')
+        : `⛔ **${subject.rec.tag || subjectId}** is blocked. Nothing new opens for them; anything ` +
+          'already open is still managed and settled, and their key keeps counting down.',
       flags: MessageFlags.Ephemeral
     });
+  }
+
+  // ── one-press key generation, owner only ──
+  if (id.startsWith(`${panel.ID}:gen:`)) {
+    const days = id.slice(`${panel.ID}:gen:`.length);
+    const r = licences.generate({ days, byUserId: t.userId });
+    if (!r.ok) {
+      return interaction.reply({ content: `❌ ${r.why}`, flags: MessageFlags.Ephemeral });
+    }
+    await ackUpdate(interaction);
+    await interaction.editReply(panel.adminPayload());
+    return interaction.followUp({ content: keyMessage(r), flags: MessageFlags.Ephemeral });
   }
 
   if (id === `${panel.ID}:home` || id === `${panel.ID}:refresh`) {
@@ -392,10 +459,10 @@ async function dispatch(interaction) {
     return interaction.editReply(panel.tradesPayload(t));
   }
   if (id === `${panel.ID}:live`) {
-    if (!t.isApproved()) {
+    if (!t.hasAccess()) {
       return interaction.reply({
-        content: '⏳ Your account is not enabled yet. Live mode can wait — nothing is acted on ' +
-          'until the owner switches you on.',
+        content: '🔑 No access on this account. Live mode can wait — nothing is acted on until a ' +
+          'key is entered.',
         flags: MessageFlags.Ephemeral
       });
     }
@@ -424,10 +491,10 @@ async function dispatch(interaction) {
   if (id === `${panel.ID}:arm`) {
     // Checked here as well as disabled on the button: Discord keeps old messages, and the button on
     // one rendered before the owner disabled this account would otherwise still arm it.
-    if (!t.isApproved()) {
+    if (!t.hasAccess()) {
       return interaction.reply({
-        content: '⏳ Your account is not enabled yet, so arming would change nothing — the scanner ' +
-          'skips it entirely. The owner has to switch it on first.',
+        content: '🔑 No access on this account, so arming would change nothing — the scanner skips ' +
+          'it entirely. Press **Enter key** with the key you were given.',
         flags: MessageFlags.Ephemeral
       });
     }

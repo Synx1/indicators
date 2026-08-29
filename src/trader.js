@@ -268,10 +268,15 @@ function shardCash(t, exchangeIndex) {
 }
 
 function accountBlock(t, d) {
-  // The owner's switch comes before every other question. An account nobody has enabled does not
-  // trade at all — not live, and not paper either, because a paper book built while waiting is a
-  // record of trades the owner never agreed to run.
-  if (!t.isApproved()) return 'not enabled by the owner yet';
+  // Access comes before every other question. Without a key on the clock this account does not trade
+  // at all — not live, and not paper either, because a paper book built without access is a record
+  // of trades nobody was entitled to run, and it would arrive with a P&L attached the moment a key
+  // was entered.
+  if (!t.hasAccess()) {
+    return t.rec.blocked === true
+      ? 'blocked by the owner'
+      : (t.rec.accessUntil ? 'access has expired — a new key is needed' : 'no access key entered');
+  }
 
   const b = t.rec.book;
 
@@ -820,6 +825,16 @@ async function refreshBalances(accounts) {
 async function runOnce() {
   stats.passes++;
   const accounts = users.all();
+
+  // A lapse must not leave `armed` set. Otherwise entering a new key weeks later makes the account
+  // instantly hot with real money and no fresh human decision — the same reasoning that makes
+  // "Go paper" disarm, and that clears arming on every restart.
+  for (const t of accounts) {
+    if (t.get('armed') && !t.hasAccess()) {
+      t.set('armed', 'off');
+      log(`  ${t.rec.tag || t.userId}: access lapsed — disarmed`);
+    }
+  }
 
   // Before any sizing decision, so the size and the affordability guard are computed against a
   // balance from this minute rather than from whenever somebody last opened the panel.
