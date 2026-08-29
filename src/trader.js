@@ -419,6 +419,68 @@ function rejectIsNew(userId, why) {
   return true;
 }
 
+/**
+ * What actually filled for one order, from a fills list.
+ *
+ * ── the bug this exists to make impossible ──
+ *
+ * This was inline, and it filtered on `f.order_id` while kalshitrade.fills() normalises that field
+ * to `orderId`. The filter therefore matched nothing on every order ever placed: `contracts` came
+ * out 0, the code took the missed-fill branch, and the user was told "the book moved or nothing was
+ * offered" while the position sat filled on the exchange. Four live positions — BTC 2, ETH 2, XRP 7,
+ * SOL 14, about $19 — ended up held with no record in the book: no exit management, no settlement,
+ * invisible to the position cap, and re-entered because the per-ticker guard could not see them.
+ * The price and fee were read from the wrong names too (`yes_price`, `fee_cost_dollars`).
+ *
+ * So it is one function, it accepts BOTH the normalised and the raw field names, and it is tested
+ * against the real payloads. `forSide` prices the raw shape on the leg we actually hold — a NO fill
+ * read off `yes_price_dollars` reports an 83c purchase as 17c, which turns a loss into a profit.
+ */
+function reconcileFills(fills, orderId, forSide) {
+  const list = Array.isArray(fills) ? fills : [];
+  const mine = list.filter(f => {
+    const id = f.orderId != null ? f.orderId : f.order_id;
+    return id != null && orderId != null && String(id) === String(orderId);
+  });
+  const want = String(forSide || '').toUpperCase();
+  let contracts = 0;
+  let centsTotal = 0;
+  let priced = 0;
+  let fee = 0;
+  for (const f of mine) {
+    const rawCount = f.count != null ? f.count : f.count_fp;
+    // Rounded: a contract is indivisible, and the fixed-point field has produced 16.01 before,
+    // which the book stored and the exit could not clear.
+    const n = Math.round(Number(rawCount) || 0);
+    if (!(n > 0)) continue;
+    contracts += n;
+
+    let cents = f.priceCents != null ? Number(f.priceCents) : null;
+    if (cents == null) {
+      const side = String(f.outcome_side || f.side || want || '').toUpperCase();
+      const leg = want || side;
+      const d = leg === 'NO' ? f.no_price_dollars : f.yes_price_dollars;
+      if (d != null) cents = Number(d) * 100;
+      else {
+        const legacy = leg === 'NO' ? f.no_price : f.yes_price;
+        if (legacy != null) cents = Number(legacy);
+      }
+    }
+    if (cents != null && Number.isFinite(cents)) { centsTotal += cents * n; priced += n; }
+
+    const feeRaw = f.feeDollars != null ? f.feeDollars : f.fee_cost;
+    fee += Number(feeRaw) || 0;
+  }
+  return {
+    contracts,
+    // Weighted by contract, over the fills that carried a price. Null rather than 0 when none did:
+    // a zero price would record a free position.
+    avgCents: priced > 0 ? +(centsTotal / priced).toFixed(2) : null,
+    feeDollars: +fee.toFixed(4),
+    fills: mine.length
+  };
+}
+
 async function applyTo(t, d) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
@@ -469,22 +531,23 @@ async function applyTo(t, d) {
   // how a live book starts flattering itself.
   await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
   let fills = null;
-  try { fills = await client.fills({ ticker: d.market.ticker, limit: 50 }); }
+  try { fills = await client.fills({ ticker: d.market.ticker, limit: 50, forSide: d.side }); }
   catch (e) { fills = { ok: false, why: e.message }; }
 
-  const got = (fills && fills.ok && Array.isArray(fills.fills))
-    ? fills.fills.filter(f => f.order_id === (res.order && res.order.order_id))
-    : [];
-  const contracts = got.reduce((a, f) => a + (Number(f.count) || 0), 0);
+  const orderId = res.order && res.order.order_id;
+  const got = (fills && fills.ok && Array.isArray(fills.fills)) ? fills.fills : [];
+  const rec0 = reconcileFills(got, orderId, d.side);
+  const contracts = rec0.contracts;
   if (!contracts) {
     // Not a rejection and not a fault: the order was placed correctly and nobody sold into it.
     // Said in those words, because the natural reading of silence here is "the bot is broken".
     await notify.missedFill(t, d, { limitCents });
     return { taken: false, why: `no fill at ${limitCents}c — the book moved or nothing was offered` };
   }
-  const centsTotal = got.reduce((a, f) => a + (Number(f.yes_price ?? f.price) || 0) * (Number(f.count) || 0), 0);
-  const avgCents = centsTotal / contracts;
-  const charged = got.reduce((a, f) => a + (Number(f.fee_cost_dollars ?? 0) || 0), 0);
+  // The LIMIT, not the quote, when the price cannot be read: it is the worst we agreed to pay, so a
+  // book that records it can only understate the edge. A quote-priced fallback flatters.
+  const avgCents = rec0.avgCents != null ? rec0.avgCents : limitCents;
+  const charged = rec0.feeDollars;
   const p = record(t, d, {
     contracts, requested: shares,
     priceCents: +avgCents.toFixed(2), price: +(avgCents / 100).toFixed(4),
@@ -572,16 +635,21 @@ async function closePosition(t, p, sell, reason) {
     if (!res.ok) return { sold: false, why: res.why };
     await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
     let f = null;
-    try { f = await client.fills({ ticker: p.ticker, limit: 50 }); } catch (_) { f = null; }
-    const got = (f && f.ok && Array.isArray(f.fills))
-      ? f.fills.filter(x => x.order_id === (res.order && res.order.order_id)) : [];
-    const n = got.reduce((a, x) => a + (Number(x.count) || 0), 0);
+    try { f = await client.fills({ ticker: p.ticker, limit: 50, forSide: p.side }); }
+    catch (_) { f = null; }
+    const orderId = res.order && res.order.order_id;
+    const got = (f && f.ok && Array.isArray(f.fills)) ? f.fills : [];
+    // Same reconciliation as the entry, for the same reason: reading these fields by the wrong
+    // names reported every fill as a miss. On a SELL that is worse than on a buy — it would leave a
+    // position marked as held when it had actually been sold, and try to sell it again.
+    const recx = reconcileFills(got, orderId, p.side);
+    const n = recx.contracts;
     // A failed SELL is more serious than a failed buy: the position is STILL EXPOSED with the
     // clock running. Reported as unsold so the next pass tries again.
     if (!n) return { sold: false, why: `no fill at ${limitCents}¢ — still holding` };
-    const centsTotal = got.reduce((a, x) => a + (Number(x.yes_price ?? x.price) || 0) * (Number(x.count) || 0), 0);
-    const avg = centsTotal / n / 100;
-    const charged = got.reduce((a, x) => a + (Number(x.fee_cost_dollars ?? 0) || 0), 0);
+    // The limit is the floor we agreed to accept, so it can only understate the proceeds.
+    const avg = (recx.avgCents != null ? recx.avgCents : limitCents) / 100;
+    const charged = recx.feeDollars;
     const closed = book.close(t.rec.book, p, {
       contracts: n, priceCents: Math.round(avg * 100), price: +avg.toFixed(4),
       proceeds: +(n * avg).toFixed(4),
@@ -840,7 +908,7 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
-  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash, refreshBalances,
+  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash, refreshBalances, reconcileFills,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,
