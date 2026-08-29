@@ -56,7 +56,16 @@ function blankUser(id) {
     // trip today's limit.
     day: { date: null, realised: 0, n: 0 },
     balance: null,
-    balanceAt: null
+    balanceAt: null,
+    // ── the owner's switch, and why it is on the RECORD and not in settings ──
+    //
+    // Settings are the user's own; this one is not theirs to change. A new account can look at its
+    // panel, hold a paper book and read its own balance from the moment it appears, but nothing
+    // trades — paper or live — until the owner enables it. Default false, and the owner is exempt
+    // because somebody has to be able to approve the first account.
+    approved: false,
+    approvedAt: null,
+    approvedBy: null
   };
 }
 
@@ -191,6 +200,23 @@ function tenant(userId, { create = false } = {}) {
       day.n++;
       save();
       return day;
+    },
+    /**
+     * Whether the owner has enabled this account to trade at all.
+     *
+     * The owner is approved implicitly: the alternative is a bot that cannot approve its own first
+     * account. Everybody else waits for a press.
+     */
+    isApproved() {
+      return userId === OWNER_ID || rec.approved === true;
+    },
+    /** Enable or disable an account. Only ever called from an owner-gated path. */
+    setApproved(on, byUserId) {
+      rec.approved = Boolean(on);
+      rec.approvedAt = rec.approved ? new Date().toISOString() : null;
+      rec.approvedBy = rec.approved ? String(byUserId || '') : null;
+      save();
+      return rec.approved;
     },
     /** Why this account cannot open a live position, or null when it can. */
     liveBlock() {

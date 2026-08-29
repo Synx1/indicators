@@ -29,8 +29,11 @@ const SET = {
   riskPerTrade: 0.25, paperResetAt: null
 };
 const tenant = (over, positions, balance = null) => ({
-  rec: { book: { positions, seq: positions.length }, balance },
-  get: k => ({ ...SET, ...over })[k]
+  rec: { book: { positions, seq: positions.length }, balance, approved: true },
+  get: k => ({ ...SET, ...over })[k],
+  // The owner's switch. Every case below is an ENABLED account unless it says otherwise, so the
+  // guards under test are the ones being tested rather than this one.
+  isApproved: () => (over.approved === undefined ? true : over.approved)
 });
 /** An open position: no `outcome`, so the book counts it as held. */
 const held = (live, { ticker = 'KXBTC-A', closeTime = CLOSE, side = 'YES', sym = 'BTC' } = {}) =>
@@ -102,6 +105,15 @@ allows(withShards(null), cryptoDec,
   'with no breakdown read yet it falls back to the total — a cold cache must not refuse everything');
 allows(withShards({ '0': 24.17, '2': 0.02 }), { ...dec(), exchangeIndex: null },
   'and a market with no shard reported is judged on the total, as before');
+
+// ── the owner's switch comes before everything ──
+// An account nobody has enabled does not trade at all — not live, and not paper either, because a
+// paper book built while waiting records trades the owner never agreed to run.
+blocks(tenant({ approved: false }, [], 24.9), dec(), /not enabled by the owner yet/,
+  'an unapproved account is refused before any other question is asked');
+blocks(tenant({ approved: false, armed: false, live: false }, [], 24.9), dec(),
+  /not enabled by the owner yet/, 'and paper is refused too, not just live');
+allows(tenant({ approved: true }, [], 24.9), dec(), 'an enabled account is judged on its merits');
 
 // ── guards that must not have moved ──
 blocks(tenant({}, [], 1.0), dec(), /only \$0\.30 is free|but only/,

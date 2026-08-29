@@ -196,6 +196,14 @@ async function balanceFor(t) {
 
 function statusLine(t) {
   const live = t.get('live');
+  // Before anything about live or paper: an account nobody has enabled is not trading either way,
+  // and a panel that shows "Paper — every decision is recorded" to somebody whose decisions are
+  // being discarded is simply wrong.
+  if (!t.isApproved()) {
+    return { badge: '⏳', title: 'Waiting to be enabled', colour: 0xfbbf24,
+      text: 'the owner has to switch your account on before anything trades. You can look around ' +
+        'and set things up in the meantime — nothing is acted on yet, not even paper.' };
+  }
   if (gl.isKilled()) {
     return { badge: '🚨', title: 'Halted', colour: 0xf87171,
       text: 'the kill switch is on, so nothing will open for anybody.' };
@@ -439,9 +447,15 @@ async function mainPayload(t) {
     });
   } else if (!keyed) {
     e.addFields({
-      name: 'No Kalshi key — paper works anyway',
-      value: 'You do **not** need a key. It is already scanning and the P&L above is real ' +
-        'bookkeeping on real prices. A key buys one thing: **real money**.' +
+      name: t.isApproved() ? 'No Kalshi key — paper works anyway' : 'No Kalshi key — nothing to do yet',
+      // The copy has to follow the gate. Telling somebody "it is already scanning and the P&L above
+      // is real bookkeeping" while their account is switched off is simply untrue, and it is the
+      // kind of untrue that reads as the bot being broken later.
+      value: (t.isApproved()
+        ? 'You do **not** need a key. It is already scanning and the P&L above is real ' +
+          'bookkeeping on real prices. A key buys one thing: **real money**.'
+        : 'Nothing is being recorded yet — your account is waiting to be enabled by the owner. ' +
+          'You can import a key now if you want to be ready, but it changes nothing until then.') +
         // Said BEFORE the import rather than after it disappears. An import onto a disk the
         // platform rebuilds looks identical to a successful one until the next release.
         (KEY_DIR_PERSISTENT ? '' :
@@ -486,16 +500,20 @@ async function mainPayload(t) {
 function mainComponents(t) {
   const live = t.get('live'), armed = t.get('armed');
   const keyed = auth.isImported(t.userId);
+  const approved = t.isApproved();
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${ID}:arm`)
       .setLabel(armed ? 'Disarm' : 'Arm')
       .setStyle(armed ? ButtonStyle.Danger : ButtonStyle.Success)
       // Arming with no key would fail at the order, not at the button. Refusing here says why.
-      .setDisabled(!keyed && !armed),
+      // An unapproved account cannot arm at all: the trader would refuse every entry anyway, and a
+      // button that appears to work while changing nothing is worse than one that is plainly off.
+      .setDisabled((!keyed && !armed) || !approved),
     new ButtonBuilder().setCustomId(`${ID}:live`)
       .setLabel(live ? 'Go paper' : 'Go live')
-      .setStyle(live ? ButtonStyle.Secondary : ButtonStyle.Primary),
+      .setStyle(live ? ButtonStyle.Secondary : ButtonStyle.Primary)
+      .setDisabled(!approved),
     new ButtonBuilder().setCustomId(`${ID}:refresh`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
   );
   const row2 = new ActionRowBuilder().addComponents(
@@ -653,6 +671,8 @@ function adminPayload() {
       shares: resolvedShares(t) || 0,
       dailyStop: t.get('dailyStopLoss'),
       todayRealised: t.day().realised,
+      approved: t.isApproved(),
+      pending: !t.isApproved(),
       lastReject: t.rec.lastReject || null,
       balanceShards: t.rec.balanceShards || null,
       // Crypto is shard 2 in Kalshi's own sharding doc, and every market this bot trades is crypto.
@@ -663,7 +683,8 @@ function adminPayload() {
       liveNet: liveSt.net, paperNet: paperSt.net,
       liveN: liveSt.n, paperN: paperSt.n,
       liveToday: liveEq.todayNet,
-      state: gl.isKilled() ? 'halted' : !t.get('live') ? 'paper' : t.get('armed') ? 'ARMED' : 'live'
+      state: !t.isApproved() ? 'OFF' :
+        gl.isKilled() ? 'halted' : !t.get('live') ? 'paper' : t.get('armed') ? 'ARMED' : 'live'
     };
   });
 
@@ -690,6 +711,23 @@ function adminPayload() {
     .setColor(gl.isKilled() ? 0xf87171 : armedN ? 0x4ade80 : 0x71717a)
     .setAuthor({ name: `${NAME} ${VERSION} · owner` })
     .setTitle(gl.isKilled() ? 'Halted — kill switch on' : `${all.length} account(s), ${armedN} armed`);
+
+  // ── who is waiting to be let in ──
+  //
+  // First, above the money: somebody who has found the bot and cannot use it is the most
+  // time-sensitive thing on this screen, and they cannot tell whether they are queued or ignored.
+  const waiting = snaps.filter(x => x.pending);
+  if (waiting.length) {
+    e.addFields({
+      name: `⏳ Waiting to be enabled  ·  ${waiting.length}`,
+      value: waiting.map(x =>
+        `**${x.who}** — joined ${x.t.rec.createdAt ? new Date(x.t.rec.createdAt).toLocaleString() : '—'}` +
+        `${x.keyed ? ', key imported' : ', no key yet'}`
+      ).join('\n') + '\n\n_Press the green button below to enable. Nothing trades for them until ' +
+      'you do — not even paper._',
+      inline: false
+    });
+  }
 
   // ── what to look at, before what happened ──
   //
@@ -755,6 +793,29 @@ function adminPayload() {
 
 function adminComponents() {
   const rows = [];
+
+  // ── enable / disable accounts, newest first ──
+  //
+  // Newest first because the person who just appeared is the one waiting to be let in. The owner's
+  // own row is omitted — they are approved implicitly and a button to disable yourself is a trap.
+  // Discord allows five rows of five and the markets take two of them, so this is capped at one row
+  // of five with the count spelled out in the embed when there are more.
+  const others = users.all()
+    .filter(x => x.userId !== OWNER_ID)
+    .sort((a, b) => new Date(b.rec.createdAt || 0) - new Date(a.rec.createdAt || 0))
+    .slice(0, 5);
+  if (others.length) {
+    rows.push(new ActionRowBuilder().addComponents(
+      ...others.map(x => {
+        const on = x.rec.approved === true;
+        return new ButtonBuilder()
+          .setCustomId(`${ID}:${on ? 'no' : 'ok'}:${x.userId}`)
+          .setLabel(`${on ? '⛔' : '✅'} ${(x.rec.tag || x.userId).slice(0, 14)}`)
+          .setStyle(on ? ButtonStyle.Secondary : ButtonStyle.Success);
+      })
+    ));
+  }
+
   // One button per market, in two rows of four/three. Labelled with the state it is IN, not the
   // action, because a button reading "BTC off" is ambiguous about which it means.
   for (let i = 0; i < gl.SYMS.length; i += 4) {

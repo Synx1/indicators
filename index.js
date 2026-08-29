@@ -7,7 +7,7 @@
 
 const {
   Client, GatewayIntentBits, Partials, Events, REST, Routes,
-  SlashCommandBuilder, MessageFlags, InteractionContextType
+  SlashCommandBuilder, MessageFlags, InteractionContextType, ApplicationIntegrationType
 } = require('discord.js');
 
 const {
@@ -93,9 +93,21 @@ const client = new Client({
 const command = new SlashCommandBuilder()
   .setName('dashboard')
   .setDescription('Your balance, positions, P&L and controls')
-  // Declared DM-only to Discord as well as enforced below. The panel shows a balance and open
-  // positions; in a server an ephemeral reply is one misclick from a screenshot.
-  .setContexts(InteractionContextType.BotDM);
+  // ── why a USER install, not only a guild install ──
+  //
+  // Discord will not let somebody DM a bot they share no server with. With a guild install only,
+  // "other people cannot use the bot" is the correct behaviour rather than a fault: they had no way
+  // to open the conversation. A user install lets a person add the app to their own account and run
+  // /dashboard in their own DMs, which is the whole distribution story for a bot that is DM-only by
+  // design.
+  .setIntegrationTypes([
+    ApplicationIntegrationType.GuildInstall,
+    ApplicationIntegrationType.UserInstall
+  ])
+  // Still never in a server. The panel shows a balance and open positions; in a guild an ephemeral
+  // reply is one misclick from a screenshot. Private channels are allowed because that is where a
+  // user-installed app lives, and every reply here is ephemeral.
+  .setContexts(InteractionContextType.BotDM, InteractionContextType.PrivateChannel);
 
 async function registerCommands(appId) {
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
@@ -297,7 +309,8 @@ async function dispatch(interaction) {
   // One gate for every fleet-wide control, so a control added later is owner-only by default
   // instead of by somebody remembering to add the check.
   const OWNER_IDS = [`${panel.ID}:admin`, `${panel.ID}:kill`];
-  const isOwnerControl = OWNER_IDS.includes(id) || id.startsWith(`${panel.ID}:mkt:`);
+  const isOwnerControl = OWNER_IDS.includes(id) || id.startsWith(`${panel.ID}:mkt:`) ||
+    id.startsWith(`${panel.ID}:ok:`) || id.startsWith(`${panel.ID}:no:`);
   if (isOwnerControl && !t.isOwner) {
     return interaction.reply({
       content: '🔒 That control is owner-only.',
@@ -338,6 +351,34 @@ async function dispatch(interaction) {
     });
   }
 
+  // ── enable or disable another account, owner only ──
+  //
+  // The id carries the SUBJECT's user id, which is the one place this bot reads an id out of a
+  // customId rather than from the interaction. It is safe here and only here: the surrounding gate
+  // has already established the presser is the owner, and validId() refuses anything that is not a
+  // snowflake. tenant() without `create` then refuses an id that has never appeared on its own.
+  if (id.startsWith(`${panel.ID}:ok:`) || id.startsWith(`${panel.ID}:no:`)) {
+    const on = id.startsWith(`${panel.ID}:ok:`);
+    const subjectId = id.slice(`${panel.ID}:${on ? 'ok' : 'no'}:`.length);
+    const subject = users.validId(subjectId) ? users.tenant(subjectId) : null;
+    if (!subject) {
+      return interaction.reply({ content: '❌ No such account.', flags: MessageFlags.Ephemeral });
+    }
+    subject.setApproved(on, t.userId);
+    await ackUpdate(interaction);
+    await interaction.editReply(panel.adminPayload());
+    // Told, not left to be discovered. Somebody waiting has no way to know the switch was flipped.
+    if (on) notify.enabled(subject).catch(() => {});
+    return interaction.followUp({
+      content: on
+        ? `✅ **${subject.rec.tag || subjectId}** is enabled. Their signals will be acted on from ` +
+          'the next pass — as paper until they press Go live and Arm themselves.'
+        : `⛔ **${subject.rec.tag || subjectId}** is disabled. Nothing new opens for them; anything ` +
+          'already open is still managed and settled.',
+      flags: MessageFlags.Ephemeral
+    });
+  }
+
   if (id === `${panel.ID}:home` || id === `${panel.ID}:refresh`) {
     await ackUpdate(interaction);
     return interaction.editReply(await panel.mainPayload(t));
@@ -351,6 +392,13 @@ async function dispatch(interaction) {
     return interaction.editReply(panel.tradesPayload(t));
   }
   if (id === `${panel.ID}:live`) {
+    if (!t.isApproved()) {
+      return interaction.reply({
+        content: '⏳ Your account is not enabled yet. Live mode can wait — nothing is acted on ' +
+          'until the owner switches you on.',
+        flags: MessageFlags.Ephemeral
+      });
+    }
     const turningOn = !t.get('live');
     t.set('live', turningOn ? 'on' : 'off');
     // Going back to paper disarms too. Leaving `armed` set on a paper account means the next
@@ -374,6 +422,15 @@ async function dispatch(interaction) {
     });
   }
   if (id === `${panel.ID}:arm`) {
+    // Checked here as well as disabled on the button: Discord keeps old messages, and the button on
+    // one rendered before the owner disabled this account would otherwise still arm it.
+    if (!t.isApproved()) {
+      return interaction.reply({
+        content: '⏳ Your account is not enabled yet, so arming would change nothing — the scanner ' +
+          'skips it entirely. The owner has to switch it on first.',
+        flags: MessageFlags.Ephemeral
+      });
+    }
     if (t.get('armed')) {
       t.set('armed', 'off');
       await ackUpdate(interaction);

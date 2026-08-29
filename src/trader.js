@@ -268,6 +268,11 @@ function shardCash(t, exchangeIndex) {
 }
 
 function accountBlock(t, d) {
+  // The owner's switch comes before every other question. An account nobody has enabled does not
+  // trade at all — not live, and not paper either, because a paper book built while waiting is a
+  // record of trades the owner never agreed to run.
+  if (!t.isApproved()) return 'not enabled by the owner yet';
+
   const b = t.rec.book;
 
   // ── which book these guards may count ──

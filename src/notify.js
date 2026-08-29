@@ -166,6 +166,27 @@ async function orderRejected(t, d, why) {
   return send(t.userId, { embeds: [e] });
 }
 
+/**
+ * The owner enabled this account.
+ *
+ * Sent because the wait is otherwise indistinguishable from a broken bot: the panel renders, the
+ * balance reads, and nothing ever trades. Somebody in that state has no way to tell whether they
+ * are queued or ignored.
+ */
+async function enabled(t) {
+  const e = base(0x4ade80, '✅ You are enabled',
+    'The owner has switched your account on. From the next scan, qualifying signals will be acted ' +
+    'on for you.');
+  e.addFields({
+    name: '​',
+    value: 'It starts as **paper** — real bookkeeping on real prices, no order sent. To trade real ' +
+      'money you also need to import a Kalshi key, press **Go live**, and then **Arm**.\n\n' +
+      'Run `/dashboard` to see it.',
+    inline: false
+  });
+  return send(t.userId, { embeds: [e] });
+}
+
 // ── exits ───────────────────────────────────────────────────────
 
 /** Sold early, at the user's cashout price. */
@@ -244,6 +265,7 @@ async function forcedDisarm(userId) {
 }
 
 module.exports = {
-  init, forcedDisarm, entry, missedFill, orderRejected, cashout, settled, awaitingSettlement, readOf,
+  init, forcedDisarm, enabled, entry, missedFill, orderRejected, cashout, settled,
+  awaitingSettlement, readOf,
   pending, drain
 };
