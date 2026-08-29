@@ -204,7 +204,13 @@ async function dispatch(interaction) {
     if (id === `${panel.ID}:key`) return interaction.showModal(panel.keyModal());
     if (id.startsWith(`${panel.ID}:set:`)) {
       const key = id.slice(`${panel.ID}:set:`.length);
-      if (!settings.SCHEMA[key]) return; // unknown key: the boundary explains it as stale
+      // Unknown OR hidden: the boundary explains either as a stale control.
+      //
+      // Hidden matters as much as unknown here. Discord keeps old messages forever, so a panel
+      // rendered before `armed` was withdrawn still carries its button — and this path writes with
+      // a bare t.set(), which would arm real money while skipping every check the Arm button makes.
+      // Withdrawing a control means refusing it here, not only leaving it off the next render.
+      if (!settings.SCHEMA[key] || settings.SCHEMA[key].hidden) return;
       // A boolean has nothing to type. Toggling is one press instead of a modal asking for
       // "on" — the kind of friction that makes a panel feel like paperwork.
       if (settings.SCHEMA[key].type === settings.TYPE.BOOL) {
@@ -258,7 +264,8 @@ async function dispatch(interaction) {
     if (id.startsWith(`${panel.ID}:setmodal:`)) {
       const key = id.slice(`${panel.ID}:setmodal:`.length);
       const spec = settings.SCHEMA[key];
-      if (!spec) return;
+      // Hidden refused here too — a modal from an old message is the same stale control as a button.
+      if (!spec || spec.hidden) return;
       const raw = interaction.fields.getTextInputValue('value');
       const res = t.set(key, raw);
       if (!res.ok) {

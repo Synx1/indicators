@@ -117,8 +117,17 @@ const SCHEMA = {
       'watching right now".'
   },
   armed: {
-    group: 'money', label: 'Armed', type: TYPE.BOOL, def: false,
-    help: 'The live trigger. **Always off after a restart**, whatever it was before.\n\n' +
+    group: 'money', label: 'Armed', type: TYPE.BOOL, def: false, hidden: true,
+    // ── hidden from the Settings screen on purpose ──
+    //
+    // Not because it is unimportant — because it is the most important switch there is, and the
+    // Settings screen is the wrong place to flip it. That screen writes with a bare t.set(), so a
+    // toggle here armed real money while bypassing every check the Arm button makes: that a key
+    // exists and decrypts, that live mode is on, and the warning when one trade is most of the
+    // balance. Two controls for one dangerous action, one of them unguarded, is how somebody arms
+    // an account by accident. The Arm button is the only way in.
+    help: 'The live trigger, pressed with the **Arm** button rather than set here. ' +
+      '**Always off after a restart**, whatever it was before.\n\n' +
       'That is the point: a crash loop, a redeploy or an unattended reboot all come back in ' +
       'paper, so real money can only be trading because somebody armed it since the process ' +
       'started.'
