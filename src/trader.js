@@ -265,6 +265,26 @@ function liveOrPaperBalance(t) {
  * Floors to whole contracts. Kalshi does not sell fractions and rounding up is how an order becomes
  * unaffordable by one contract.
  */
+/**
+ * ── correcting the record, 2026-08-29 ──
+ *
+ * I claimed three times, including in a commit message, that this function was sizing ABOVE its own
+ * riskPerTrade limit — "15 contracts where 25% risk implies 7". It was not. I was dividing by a
+ * balance figure that was hours stale.
+ *
+ * Every live fill that day reconciles exactly with floor(balance × risk / 0.80), and `requested`
+ * equals `contracts` on all nineteen of them:
+ *
+ *     7 contracts  <- balance ~$22    15 <- ~$48    25 <- ~$80
+ *
+ * The stakes grew because the account grew. There is no sizing bug here.
+ *
+ * What IS true, and worth more than the bug I invented: this design is aggressive by construction. At
+ * 25% risk each position costs a quarter of the account, and a binary loses the entire stake — so
+ * four consecutive losses is the account, and six losses at ~$19 is the -$110 of gross losses that
+ * made 2026-08-29 a -$57 day. riskPerTrade is the dial that decides how much a bad run costs; the
+ * entry gate only decides how often one happens.
+ */
 function sharesFor(t, d) {
   const fixed = Math.floor(Number(t.get('shares')) || 0);
   if (!t.get('autoShares')) return fixed;
