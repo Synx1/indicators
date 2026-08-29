@@ -65,8 +65,17 @@ const axios = require('axios');
  *
  * bot.js keeps 85 deliberately — gridsearch.js and replay.js enumerate their pools through
  * `bot.MIN_CONF`, so moving it there would silently reprice every historical baseline they print.
+ *
+ * ── REVERTED to 85 on 2026-08-29, on live evidence ──
+ *
+ * The replay said 83 was worth +$135 over 1806 markets. Live, on the day, it was losing — so it is
+ * back at 85 while that disagreement is explained rather than argued with. The replay is not wrong
+ * about its own data; it is evidence about a sample, and a live book is evidence about now. When the
+ * two disagree the live one wins, and the honest next step is to find out WHY they disagree — the
+ * last time this bot had a backtest-versus-live gap it was a data-freshness bug, not a strategy
+ * error, and no amount of retuning would have found it.
  */
-const MIN_CONF = 83;
+const MIN_CONF = 85;
 const MIN_CONFIRM = 3;
 const MIN_PRICE = 0.25;
 const MAX_PRICE = 0.80;
