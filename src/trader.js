@@ -39,7 +39,34 @@ const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
 const axios = require('axios');
 
 // ── the indicators bot's own constants, named as it names them ──
-const MIN_CONF = 85;
+/**
+ * The confidence floor, lowered from 85 to 83 on 2026-08-29 by measurement rather than by feel.
+ *
+ * research-frequency.js enumerates every candidate loosely over 1806 collected markets and then
+ * varies one gate at a time. Decomposed by confidence band, at the live 80¢ ceiling:
+ *
+ *   90-101%   +$2.65/trade   +8.7pp margin
+ *   83-85%    +$1.99/trade   +6.5pp      <- the band this opens
+ *   82-83%    +$1.71/trade   +6.0pp
+ *   80-82%    +$1.56/trade   +5.3pp
+ *   75-80%    -$0.96/trade   -3.3pp      <- the cliff
+ *
+ * 83-85% is better per trade than 85-90% (+$0.61), which reads as a contradiction until you notice
+ * what confidence buys: a higher model reading means a dearer contract, so the edge lives where the
+ * model is confident and the market has NOT finished pricing it. Whole-config, taking the first
+ * qualifying look exactly as the live loop does: 416 trades and +$1040.83 against 327 and +$905.73 —
+ * 89 more trades (+27%) for +$135 (+15%), $2.50/trade against $2.77, positive in both chronological
+ * halves.
+ *
+ * Not lower than 83, even though 80-82% is profitable in isolation: taking those entries drops the
+ * total to +$864, BELOW the 85% baseline. The bot enters on the first qualifying look, so a cheap
+ * early entry displaces a better one later in the same market. The sequential simulation is what the
+ * bot actually does, so it outranks the bucket arithmetic.
+ *
+ * bot.js keeps 85 deliberately — gridsearch.js and replay.js enumerate their pools through
+ * `bot.MIN_CONF`, so moving it there would silently reprice every historical baseline they print.
+ */
+const MIN_CONF = 83;
 const MIN_CONFIRM = 3;
 const MIN_PRICE = 0.25;
 const MAX_PRICE = 0.80;
