@@ -95,7 +95,8 @@ function scannerLine() {
  * Returns null when there is nothing to say: no key, no balance read, or the size fits.
  */
 const BAND_LO = 0.25;
-const BAND_HI = 0.80;
+// Kept in step with src/trader.js MAX_PRICE, which is the source of truth for the entry band.
+const BAND_HI = 0.65;
 /**
  * The exchange shard the 15-minute crypto markets live on.
  *

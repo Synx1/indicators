@@ -73,17 +73,45 @@ const axios = require('axios');
  *
  * ── REVERTED to 85 on 2026-08-29, on live evidence ──
  *
- * The replay said 83 was worth +$135 over 1806 markets. Live, on the day, it was losing — so it is
- * back at 85 while that disagreement is explained rather than argued with. The replay is not wrong
- * about its own data; it is evidence about a sample, and a live book is evidence about now. When the
- * two disagree the live one wins, and the honest next step is to find out WHY they disagree — the
- * last time this bot had a backtest-versus-live gap it was a data-freshness bug, not a strategy
- * error, and no amount of retuning would have found it.
+ * The replay said 83 was worth +$135 over 1806 markets. Live, on the day, it was losing — so it went
+ * back to 85 while that disagreement was explained rather than argued with.
+ *
+ * ── and then to 80, WITH a 65c ceiling, which is a different change entirely ──
+ *
+ * Lowering the floor on its own was wrong, and it is worth being precise about why: at an 80c
+ * ceiling a looser floor just buys more expensive contracts. The floor and the ceiling are not two
+ * independent dials, they are one decision about WHERE the edge is.
+ *
+ * A competitor bot posts its fills publicly and enters at 51-62c. That is not a better signal, it is
+ * a better position: at 51c a win pays +49c and break-even is 51%, while at 79c a win pays +21c and
+ * break-even is 79%. Measured on this bot's own 1806 markets (research-value.js), the region it had
+ * been designed to avoid:
+ *
+ *   gate                    n    hit    avg entry   $/trade   break-even   margin
+ *   25-80c, conf 85 (was)  327  84.4%      74c       +$2.77      74.8%      +9.6pp
+ *   25-65c, conf 80 (now)   97  75.3%      58c       +$4.72      58.7%     +16.6pp
+ *
+ * 70% more per trade, and the margin over break-even nearly doubles. The margin is the part that
+ * matters: the old gate could absorb a 9.6-point fall in hit rate before losing money, and on
+ * 2026-08-29 the hit rate fell 8 points and it lost $57.63. The new gate absorbs 16.6, so the same
+ * regime shift leaves it profitable instead of underwater. Positive in both chronological halves,
+ * and the neighbouring cells agree rather than one lucky corner (65c/83 = 14.8pp, 60c/78 = 14.7pp).
+ *
+ * Fewer trades — 97 against 327 on the same four days — which is the price of only taking a position
+ * where the payoff is not already spent.
+ *
+ * Same caveat as every other number here: the sample is 2026-08-05..08. This ships to PAPER, which
+ * now models missed fills honestly, and the fresh sample is what earns it real money.
  */
-const MIN_CONF = 85;
+const MIN_CONF = 80;
 const MIN_CONFIRM = 3;
 const MIN_PRICE = 0.25;
-const MAX_PRICE = 0.80;
+/**
+ * The dearest this bot will pay. 0.80 until 2026-08-30 — see MIN_CONF above for why it moved and
+ * why the two had to move together. src/panel.js and src/advice.js carry this figure for their
+ * affordability arithmetic and must be kept in step.
+ */
+const MAX_PRICE = 0.65;
 const MIN_MINUTES = 3;
 const MAX_MINUTES = 14;
 /**
