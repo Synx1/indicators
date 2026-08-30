@@ -197,4 +197,40 @@ function trades(limit = 300) {
   return { asOf: Date.now(), trades: out.slice(0, limit) };
 }
 
-module.exports = { publicState, decisions, accounts, trades, NAME, WEB_TOKEN };
+/**
+ * Hourly performance — "when is the best time to trade?" Buckets every SETTLED position by the
+ * ET hour it was PLACED (p.at), because that is the hour a human would act on. Entry time, not
+ * settlement, so the answer reads as "trades I open at 4pm do X". Open positions are excluded —
+ * a bucket only counts money that has actually resolved.
+ *
+ * CAUTION baked into the payload: `taken` is surfaced per hour so a two-trade hour can't
+ * masquerade as a signal. On a few days of data these buckets are thin; read the counts.
+ */
+const ET_HOUR = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false });
+function hours() {
+  const H = Array.from({ length: 24 }, (_, h) => ({
+    hour: h, taken: 0, wins: 0, losses: 0, net: 0, fees: 0,
+    live: { taken: 0, net: 0 }, paper: { taken: 0, net: 0 }
+  }));
+  let totalClosed = 0;
+  for (const t of users.all()) {
+    for (const p of book.closedPositions(t.rec.book)) {
+      if (p.pnl == null || !p.at) continue;              // only resolved money, timestamped
+      let h = parseInt(ET_HOUR.format(new Date(p.at)), 10) % 24;
+      if (!(h >= 0 && h < 24)) continue;
+      const b = H[h], side = p.live ? b.live : b.paper;
+      b.taken++; b.net += p.pnl; b.fees += (Number(p.entryFee) || 0) + (Number(p.exitFee) || 0);
+      if (p.pnl > 0) b.wins++; else if (p.pnl < 0) b.losses++;
+      side.taken++; side.net += p.pnl;
+      totalClosed++;
+    }
+  }
+  for (const b of H) {
+    b.net = +b.net.toFixed(2); b.fees = +b.fees.toFixed(2);
+    b.hit = b.taken ? b.wins / b.taken : null;
+    b.live.net = +b.live.net.toFixed(2); b.paper.net = +b.paper.net.toFixed(2);
+  }
+  return { asOf: Date.now(), totalClosed, hours: H };
+}
+
+module.exports = { publicState, decisions, accounts, trades, hours, NAME, WEB_TOKEN };

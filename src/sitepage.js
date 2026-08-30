@@ -114,6 +114,7 @@ tbody tr:hover{background:#15171e}
 <nav id=tabs>
   <button data-t=decisions aria-selected=true>Decisions<span class=count id=cdec></span></button>
   <button data-t=trades aria-selected=false>Trades<span class=count id=ctra></span></button>
+  <button data-t=hours aria-selected=false>Hours<span class=count id=chrs></span></button>
   <button data-t=accounts aria-selected=false>Accounts<span class=count id=cacc></span></button>
 </nav>
 
@@ -127,6 +128,7 @@ tbody tr:hover{background:#15171e}
 </section>
 
 <section id=s-trades><div id=trabody></div></section>
+<section id=s-hours><div id=hrsbody></div></section>
 <section id=s-accounts><div id=accbody></div></section>
 
 <script>
@@ -153,7 +155,7 @@ $('tabs').addEventListener('click', e => {
   tab = b.dataset.t;
   [...$('tabs').querySelectorAll('button')].forEach(x =>
     x.setAttribute('aria-selected', String(x.dataset.t === tab)));
-  ['decisions','trades','accounts'].forEach(t =>
+  ['decisions','trades','hours','accounts'].forEach(t =>
     $('s-' + t).classList.toggle('on', t === tab));
   refresh();
 });
@@ -256,6 +258,36 @@ function renderTrades(d) {
     }).join('') + '</tbody></table>';
 }
 
+const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
+function renderHours(d) {
+  if (d.locked) { $('hrsbody').innerHTML = lockedBox('Hourly P&L is account money'); return; }
+  $('chrs').textContent = d.totalClosed ? d.totalClosed : '';
+  const rows = (d.hours || []).filter(h => h.taken > 0);
+  if (!rows.length) { $('hrsbody').innerHTML = '<div class=empty>No settled trades yet — the hourly breakdown fills in as positions close.</div>'; return; }
+  const maxAbs = Math.max(1, ...rows.map(h => Math.abs(h.net)));
+  // "best time" headline needs a floor on sample size so a lucky 1-trade hour can't win it
+  const solid = rows.filter(h => h.taken >= 3);
+  const best = (solid.length ? solid : rows).reduce((a, b) => b.net > a.net ? b : a);
+  const worst = (solid.length ? solid : rows).reduce((a, b) => b.net < a.net ? b : a);
+  const bar = n => { const w = (Math.abs(n) / maxAbs * 100).toFixed(1);
+    return '<span style="display:flex;height:8px;background:#171a21;border-radius:3px;overflow:hidden;justify-content:' +
+      (n < 0 ? 'flex-end' : 'flex-start') + '"><span style="display:block;height:100%;min-width:2px;border-radius:3px;width:' +
+      w + '%;background:' + (n < 0 ? 'var(--down)' : 'var(--up)') + '"></span></span>'; };
+  $('hrsbody').innerHTML =
+    '<div class=note style="margin:0 0 14px"><b>Best time to trade — profit by the ET hour a position was opened.</b> ' +
+    'Best so far: <b class=up>' + hourLabel(best.hour) + '</b> (' + signed(best.net) + ' on ' + best.taken + '), ' +
+    'worst: <b class=down>' + hourLabel(worst.hour) + '</b> (' + signed(worst.net) + ' on ' + worst.taken + '). ' +
+    'Read the <b>taken</b> column — a few days of data makes thin hours noisy, so a big number on 2 trades is luck, not a pattern.</div>' +
+    '<table><thead><tr><th>hour (ET)</th><th class=num>taken</th><th class=num>W / L</th>' +
+    '<th class=num>win%</th><th class=num>net P&L</th><th style="width:34%">by hour</th></tr></thead><tbody>' +
+    rows.map(h => '<tr><td class=sym>' + hourLabel(h.hour) + '</td>' +
+      '<td class=num>' + h.taken + '</td>' +
+      '<td class=num>' + h.wins + ' / ' + h.losses + '</td>' +
+      '<td class=num>' + (h.taken ? pct(h.hit) : '—') + '</td>' +
+      '<td class="num ' + cls(h.net) + '">' + signed(h.net) + '</td>' +
+      '<td>' + bar(h.net) + '</td></tr>').join('') + '</tbody></table>';
+}
+
 function renderAccounts(d) {
   if (d.locked) { $('accbody').innerHTML = lockedBox('Account P&L is per-person money'); return; }
   $('cacc').textContent = d.accounts.length ? d.accounts.length : '';
@@ -312,6 +344,7 @@ async function refresh() {
   }
   if (tab === 'decisions') { const d = await get('/api/decisions'); if (d && pub) renderDecisions(d, pub); }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
+  if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
 }
 

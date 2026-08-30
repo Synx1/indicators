@@ -48,6 +48,10 @@ function start(opts = {}) {
         if (!authed(req)) return json(res, 401, { error: 'token required' });
         return json(res, 200, data.accounts());
       }
+      if (path === '/api/hours') {
+        if (!authed(req)) return json(res, 401, { error: 'token required' });
+        return json(res, 200, data.hours());
+      }
 
       if (path === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
