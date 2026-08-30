@@ -45,12 +45,27 @@ function publicState() {
   const side = mode => ({ closed: 0, wins: 0, net: 0, open: 0, atRisk: 0, today: 0, dayHigh: 0, mode });
   const live = side('live');
   const paper = side('paper');
+  // Directional exposure and the by-direction win rate — the ONE health signal this strategy
+  // actually needs. The book is a structural short (most entries are NO/DOWN), so its P&L lives or
+  // dies on whether the DOWN book keeps winning; when a rally turns that book, the loss shows up
+  // here BEFORE it shows up in the total. `open` is the tilt right now; `recent` is the last trades
+  // per side, which is the timely read (all-time hit is dominated by a good early window).
+  const dir = { open: { up: 0, down: 0 }, up: { n: 0, wins: 0, net: 0 }, down: { n: 0, wins: 0, net: 0 }, recent: [] };
   for (const t of all) {
     const b = t.rec.book;
     const s = book.stats(b);
     closed += s.n; wins += s.wins; net += s.net; fees += s.fees;
     open += book.openPositions(b).length;
     atRisk += book.atRisk(b);
+    for (const p of book.openPositions(b)) {
+      if (p.direction === 'DOWN') dir.open.down++; else dir.open.up++;
+    }
+    for (const p of book.closedPositions(b)) {
+      if (p.pnl == null) continue;                       // win by SIGN of realised P&L, as book.stats does
+      const acc = p.direction === 'DOWN' ? dir.down : dir.up;
+      acc.n++; acc.net += p.pnl; if (p.pnl > 0) acc.wins++;
+      dir.recent.push({ down: p.direction === 'DOWN', pnl: p.pnl, t: new Date(p.exitAt || p.at || 0).getTime() });
+    }
 
     const baseline = t.get('paperResetAt');
     const pairs = [
@@ -77,6 +92,21 @@ function publicState() {
     dayHigh: +a.dayHigh.toFixed(2), atRisk: +a.atRisk.toFixed(2)
   });
   const lastPass = trader && trader.lastPass ? new Date(trader.lastPass).getTime() : null;
+  // Recent-window hit per side (last 30 settled each), the timely read. warn fires when the DOWN
+  // book — the structural side — slips under 65% on a real sample, the memory's "tilt has turned".
+  dir.recent.sort((a, b) => b.t - a.t);
+  const recentHit = down => {
+    const r = dir.recent.filter(x => x.down === down).slice(0, 30);
+    return { n: r.length, hit: r.length ? r.filter(x => x.pnl > 0).length / r.length : null };
+  };
+  const rDown = recentHit(true), rUp = recentHit(false);
+  const byDir = a => ({ n: a.n, wins: a.wins, hit: a.n ? a.wins / a.n : null, net: +a.net.toFixed(2) });
+  const direction = {
+    open: dir.open,
+    up: { ...byDir(dir.up), recentHit: rUp.hit, recentN: rUp.n },
+    down: { ...byDir(dir.down), recentHit: rDown.hit, recentN: rDown.n },
+    warn: rDown.hit != null && rDown.n >= 8 && rDown.hit < 0.65
+  };
   return {
     asOf: Date.now(),
     name: NAME,
@@ -109,7 +139,8 @@ function publicState() {
       keys: KEY_DIR_SOURCE, keysPersistent: KEY_DIR_PERSISTENT
     },
     instance: INSTANCE,
-    skips: activity.skipCounts()
+    skips: activity.skipCounts(),
+    direction
   };
 }
 

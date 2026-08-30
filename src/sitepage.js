@@ -167,6 +167,10 @@ function heroCells(d) {
   // the Discord panel had, where today's paper figure sat above an all-time live one.
   const lv = d.live || { net: 0, closed: 0, today: 0, dayHigh: 0 };
   const pp = d.paper || { net: 0, closed: 0, today: 0, dayHigh: 0 };
+  // Directional health: this book is a structural short, so the DOWN side's recent hit rate is the
+  // earliest warning that a rally has turned the edge — it moves before the total does.
+  const dr = d.direction || { open: { up: 0, down: 0 }, up: {}, down: {} };
+  const dHit = dr.down && dr.down.recentHit != null ? pct(dr.down.recentHit) : '—';
   return [
     ['Live P&L', signed(lv.net), cls(lv.net),
       lv.closed ? lv.closed + ' closed · today ' + signed(lv.today) : 'no live trades yet'],
@@ -177,6 +181,10 @@ function heroCells(d) {
     ['Paper day high', money(pp.dayHigh), 'dim', 'best equity today'],
     ['Win rate', f.closed ? pct(f.hit) : '—', '', f.closed ? f.wins + 'W / ' + f.losses + 'L' : 'no trades yet'],
     ['Open', String(f.open), '', f.atRisk ? money(f.atRisk) + ' at risk' : 'nothing at risk'],
+    ['Direction now', (dr.open.down || 0) + '↓ / ' + (dr.open.up || 0) + '↑', '',
+      'open exposure by side'],
+    ['DOWN book', dHit, dr.warn ? 'down' : '',
+      dr.down && dr.down.recentN ? 'last ' + dr.down.recentN + (dr.warn ? ' · tilt turning' : ' · structural side') : 'no DOWN trades yet'],
     ['Fees', money(f.fees), 'dim', 'paid to Kalshi'],
     ['Accounts', String(f.accounts), '', d.killed ? 'HALTED' : (sc.healthy ? 'scanning' : 'scanner quiet')],
     ['Signals', String(sc.decisions), '', sc.entries + ' filled · ' + sc.passes + ' passes']
