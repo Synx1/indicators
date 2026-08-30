@@ -301,7 +301,7 @@ async function decideFor(coin) {
   const minutesLeft = (new Date(market.close_time).getTime() - Date.now()) / 60000;
   const r = decide.engineEvaluate(s.price, strike, minutesLeft, candles);
   if (!r.side) return { skip: 'no-read', why: 'model produced no side' };
-  if (r.confidence < MIN_CONF) {
+  if (!(r.confidence >= MIN_CONF)) {
     return { skip: 'below-conf', why: `${r.confidence}% is under the ${MIN_CONF}% floor` };
   }
 
@@ -936,6 +936,11 @@ async function checkExits() {
   for (const t of users.all()) {
     const target = t.get('cashoutAt');
     for (const p of book.openPositions(t.rec.book).slice()) {
+      // One position's failure — a notify handler throwing, a disk save erroring — must not skip
+      // settlement or cashout for every LATER position in this pass. Each is retried next pass, so
+      // abandoning the rest is the only outcome here with a real dollar cost. Entries already have
+      // this isolation (per-item catch in the apply loop); exits did not until now.
+      try {
       const closeMs = p.closeMs || (p.closeTime ? new Date(p.closeTime).getTime() : 0);
       const lateMin = closeMs ? (now - closeMs) / 60000 : -1;
 
@@ -994,6 +999,9 @@ async function checkExits() {
         meta: { who: t.rec.tag || t.userId, pnl: closed.pnl, live: p.live, seq: closed.seq }
       });
       await notify.settled(t, closed, won);
+      } catch (e) {
+        log(`  !! exit handling failed on ${p.sym} ${p.ticker}: ${e.message} — will retry next pass`);
+      }
     }
   }
 }

@@ -141,7 +141,11 @@ async function webhook(msg) {
 // a fill, so it has no exit fee. Modeled so reported PnL/bankroll match what
 // Kalshi actually takes instead of running ~$0.34/round-trip optimistic.
 function fee(price, shares) {
-  return Math.ceil(0.07 * shares * price * (1 - price) * 100) / 100;
+  // .toFixed(6) before the ceiling: without it 0.07*shares*price*(1-price)*100 lands on values like
+  // 175.00000000000003 and Math.ceil overstates a $1.75 fee as $1.76. Matches kalshitrade.feeDollars
+  // and src/decide.fee, which the equivalence test holds identical.
+  const rawCents = 0.07 * shares * price * (1 - price) * 100;
+  return Math.ceil(+rawCents.toFixed(6)) / 100;
 }
 // A 15-minute market finalizes within ~a minute of close_time. A position still
 // open well past that means its settlement fetch is failing; with MAX_POS such

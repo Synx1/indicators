@@ -63,7 +63,12 @@ function calcVWAP(candles, periods = 20) {
 function realizedVol(candles, lookback) {
   const returns = [];
   for (let i = 0; i < Math.min(lookback, candles.length - 1); i++) {
-    if (candles[i + 1].close > 0) returns.push(Math.log(candles[i].close / candles[i + 1].close));
+    // Both closes must be positive: a single zero/negative bar makes log() produce NaN/-Infinity,
+    // which poisons the variance and, downstream, the confidence — and NaN slips past a `< floor`
+    // gate because every comparison with NaN is false. Guard the numerator as well as the divisor.
+    if (candles[i].close > 0 && candles[i + 1].close > 0) {
+      returns.push(Math.log(candles[i].close / candles[i + 1].close));
+    }
   }
   if (returns.length < 5) return 0.0006;
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
@@ -82,13 +87,21 @@ function engineEvaluate(spot, strike, minutesLeft, candles) {
   const d = 0.3989422804 * Math.exp(-z * z / 2);
   const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
   const pYes = z >= 0 ? (1 - p) : p;
+  // A non-finite probability must fail CLOSED, not fall through. Written as an explicit finite check
+  // because `NaN >= 0.5` is false, which would otherwise mislabel a garbage read as a confident NO.
+  if (!Number.isFinite(pYes)) return { side: null, confidence: 0 };
   const confidence = Math.round(Math.max(pYes, 1 - pYes) * 100);
   const side = pYes >= 0.5 ? 'YES' : 'NO';
   return { side, confidence, z: z.toFixed(3) };
 }
 
 function fee(price, shares) {
-  return Math.ceil(0.07 * shares * price * (1 - price) * 100) / 100;
+  // The two-sided Kalshi fee, IDENTICAL to kalshitrade.feeDollars — including the .toFixed(6) that
+  // stops 0.07*shares*price*(1-price)*100 landing on e.g. 175.00000000000003 and Math.ceil turning a
+  // $1.75 fee into $1.76. Kept in lockstep by hand because this module stays dependency-free; the two
+  // must never disagree or paper and live price the same fill differently.
+  const rawCents = 0.07 * shares * price * (1 - price) * 100;
+  return Math.ceil(+rawCents.toFixed(6)) / 100;
 }
 
 module.exports = { calcRSI, calcEMA, calcBollingerBands, calcVWAP, realizedVol, engineEvaluate, fee };
