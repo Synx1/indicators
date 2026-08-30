@@ -112,7 +112,25 @@ const MIN_PRICE = 0.25;
  * affordability arithmetic and must be kept in step.
  */
 const MAX_PRICE = 0.65;
-const MIN_MINUTES = 3;
+/**
+ * The entry window, raised from 3 minutes to 8 on 2026-08-30.
+ *
+ * Measured on the band this bot now trades (25-65c, conf 80), holding to settlement, over 1806
+ * markets — research-minutes.js:
+ *
+ *   all minutes      n=97  hit 75.3%  +$4.72/trade  margin 16.6pp   halves $7.82 / $1.68
+ *   8+ minutes left  n=74  hit 81.1%  +$6.22/trade  margin 21.8pp   halves $9.11 / $3.33
+ *   9+ minutes left  n=68  hit 80.9%  +$6.13/trade  margin 21.5pp
+ *
+ * 8 rather than 9 because it keeps six more trades at the same margin. The reason to believe it is
+ * the halves: it doubles the WEAKER half, $1.68 to $3.33. A filter that improves the bad stretch is
+ * the opposite of one fitted to the good one.
+ *
+ * Mechanically it also narrows what findActive() will even look at, so a round inside eight minutes
+ * is no longer a candidate at all — the late entries this drops are the ones where the signal only
+ * appeared once the clock had eaten the room to be wrong in.
+ */
+const MIN_MINUTES = 8;
 const MAX_MINUTES = 14;
 /**
  * A spot older than this is not worth trading on.
@@ -124,7 +142,54 @@ const MAX_MINUTES = 14;
  */
 const MAX_SPOT_AGE_MS = 45 * 1000;
 const MAX_CANDLE_AGE_MS = 12 * 60 * 1000;
-const POLL_MS = 20000;
+/**
+ * How often a pass runs. 20s until 2026-08-30.
+ *
+ * A 15-minute binary near its strike has enormous delta: a small spot move swings the contract 20-30
+ * cents in seconds. Two paper misses on 2026-08-30 read "wanted 56c, now 82c" and "wanted 52c, now
+ * 85c" — not a thin book, a stale quote. Reaction time IS the edge here, so this is as low as the
+ * rate limits allow, which is what the candle cache below pays for: a pass now costs two requests per
+ * coin instead of three.
+ */
+const POLL_MS = 6000;
+/**
+ * How long a live IOC takes to reach the book, used by the paper simulation.
+ *
+ * NOT fillGrace. Fill grace is how long live waits to see WHETHER an order filled — seconds, on
+ * purpose. An order arrives in a few hundred milliseconds, so reading the book a whole fillGrace
+ * later made paper miss drift that live never experienced, and paper's job is to be wrong in the
+ * same ways live is rather than in worse ones.
+ */
+const ORDER_LATENCY_MS = 500;
+
+/**
+ * One-minute candles, cached for a minute.
+ *
+ * They are ONE-MINUTE bars: refetching 60 of them every pass was a third of the bot's request budget
+ * spent re-reading numbers that had not changed. Caching them is what makes a 6-second poll
+ * affordable. Keyed by product, and the freshness guard downstream still judges the newest bar's age,
+ * so a stale cache cannot masquerade as a fresh read.
+ */
+const CANDLE_TTL_MS = 60000;
+const candleCache = new Map();
+
+/**
+ * Per-coin cooldown after a 429.
+ *
+ * A six-second poll across seven coins is roughly three requests a second, and the market-data reads
+ * are plain axios with no retry — a rate-limited endpoint would simply be hit again 6 seconds later,
+ * forever. Backing off ONE coin keeps the other six trading, which is what the old
+ * `lastError: "HYPE: 429"` was quietly costing: one unhappy product, the whole pass's error slot.
+ */
+const COOL_MS = 20000;
+const cooling = new Map();
+const isCooling = sym => (cooling.get(sym) || 0) > Date.now();
+const coolDown = (sym, why) => {
+  cooling.set(sym, Date.now() + COOL_MS);
+  log(`  ${sym}: backing off ${COOL_MS / 1000}s — ${why}`);
+};
+/** Does this error mean "you are asking too often"? */
+const isRateLimit = e => e && (e.response?.status === 429 || /429/.test(String(e.message)));
 
 let log = () => {};
 let running = false;
@@ -169,11 +234,17 @@ async function getSpot(product) {
 }
 
 async function getCandles(product) {
+  const hit = candleCache.get(product);
+  if (hit && (Date.now() - hit.at) < CANDLE_TTL_MS) return hit.candles;
   const { data } = await axios.get(`${COINBASE_BASE}/${product}/candles`,
     { params: { granularity: 60 }, timeout: 10000 });
-  return (data || []).slice(0, 60).map(c => ({
+  const candles = (data || []).slice(0, 60).map(c => ({
     time: c[0], low: c[1], high: c[2], open: c[3], close: c[4], volume: c[5]
   }));
+  // Only a usable read is cached. Caching an empty answer would hold the whole coin dark for a
+  // minute over one bad response.
+  if (candles.length) candleCache.set(product, { at: Date.now(), candles });
+  return candles;
 }
 
 // ── one market, one decision ────────────────────────────────────
@@ -187,20 +258,40 @@ async function getCandles(product) {
 async function decideFor(coin) {
   const blocked = gl.marketBlock(coin.sym);
   if (blocked) return { skip: 'disabled', why: blocked };
+  if (isCooling(coin.sym)) {
+    return { skip: 'cooling', why: 'backing off after a rate limit' };
+  }
 
-  const market = await findActive(coin.series);
-  if (!market) return { skip: 'no-window', why: 'no round between 3 and 14 minutes out' };
+  // ── the three inputs at once ──
+  //
+  // They are independent — two Coinbase reads and one Kalshi read — and running them in series cost
+  // most of a second per coin, all of it staleness by the time the price gate ran. The candle read is
+  // usually a cache hit, so this is normally two requests in the time one used to take.
+  let market, s, candles;
+  try {
+    [market, s, candles] = await Promise.all([
+      findActive(coin.series),
+      getSpot(coin.product),
+      getCandles(coin.product)
+    ]);
+  } catch (e) {
+    if (isRateLimit(e)) {
+      coolDown(coin.sym, 'rate limited by the data feed');
+      return { skip: 'cooling', why: 'rate limited — backing off' };
+    }
+    return { skip: 'error', why: e.message };
+  }
+
+  if (!market) return { skip: 'no-window', why: `no round between ${MIN_MINUTES} and ${MAX_MINUTES} minutes out` };
 
   const strike = parseFloat(market.floor_strike);
   if (!(strike > 0)) return { skip: 'no-strike', why: 'market has no floor strike' };
 
-  const s = await getSpot(coin.product);
   if (!s) return { skip: 'no-spot', why: 'ticker unreadable or its timestamp missing' };
   if (s.ageMs > MAX_SPOT_AGE_MS) {
     return { skip: 'stale-spot', why: `spot is ${(s.ageMs / 1000).toFixed(0)}s old` };
   }
 
-  const candles = await getCandles(coin.product);
   if (!candles.length) return { skip: 'no-candles', why: 'no candle history' };
   const candleAgeMs = Date.now() - candles[0].time * 1000;
   if (candleAgeMs > MAX_CANDLE_AGE_MS) {
@@ -236,8 +327,17 @@ async function decideFor(coin) {
     return { skip: 'indicators', why: `only ${confirm}/4 agreed with ${r.side}` };
   }
 
-  const yesAsk = parseFloat(market.yes_ask_dollars || 0);
-  const noAsk = parseFloat(market.no_ask_dollars || 0);
+  // ── price it at the LAST possible moment ──
+  //
+  // The quote arrived at the top of this function, before the spot check, the model and four
+  // indicators. That is a second or more of staleness, and near the strike a 15-minute binary moves
+  // 20-30 cents in that time — two paper misses on 2026-08-30 read "wanted 56c, now 82c". The gate
+  // and the recorded price must both be what the market is offering NOW, not what it offered before
+  // the maths ran. One extra request, and only for candidates that already passed everything else.
+  const fresh = await getMarket(market.ticker);
+  const quoted = fresh || market;
+  const yesAsk = parseFloat(quoted.yes_ask_dollars || 0);
+  const noAsk = parseFloat(quoted.no_ask_dollars || 0);
   const price = r.side === 'YES' ? yesAsk : noAsk;
   if (!(price > 0)) return { skip: 'no-quote', why: 'nothing offered on our side' };
   if (price < MIN_PRICE) return { skip: 'too-cheap', why: `${Math.round(price * 100)}c is under ${MIN_PRICE * 100}c` };
@@ -251,7 +351,7 @@ async function decideFor(coin) {
     : (s.price > avgClose ? 'DIP' : 'MOVE');
 
   return {
-    sym: coin.sym, market,
+    sym: coin.sym, market: quoted,
     // The shard this market lives on, taken from Kalshi's own field rather than inferred. The
     // collateral check happens inside that shard's matching engine, so it is what an
     // affordability test has to be measured against.
@@ -642,7 +742,7 @@ async function applyTo(t, d) {
     // and the whole point of running paper is to learn what live would have done.
     const slip = Number(t.get('slippageCents')) || 0;
     const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
-    await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
+    await new Promise(r => setTimeout(r, ORDER_LATENCY_MS));
     const fresh = await getMarket(d.market.ticker);
     const askNow = fresh
       ? parseFloat(d.side === 'YES' ? fresh.yes_ask_dollars : fresh.no_ask_dollars) * 100
@@ -910,6 +1010,13 @@ async function checkExits() {
  * bounded without turning seven markets into a burst against Kalshi.
  */
 const ACCOUNT_CONCURRENCY = 4;
+/**
+ * How many coins may be fetching market data at once.
+ *
+ * Four, not seven: these reads are unauthenticated and unretried, and firing twenty-one of them in one
+ * instant is how the 429s began. Four still cuts a pass from ~9s to ~2s.
+ */
+const COIN_CONCURRENCY = 4;
 
 /**
  * Run `fn` over `items`, at most `limit` at a time, returning results in INPUT order.
@@ -991,10 +1098,29 @@ async function runOnce() {
   try { await checkExits(); }
   catch (e) { stats.lastError = `exits: ${e.message}`; log(`  !! exits pass failed: ${e.message}`); }
 
-  for (const coin of gl.COINS) {
-    let d;
-    try { d = await decideFor(coin); }
-    catch (e) { noteSkip('error'); stats.lastError = `${coin.sym}: ${e.message}`; continue; }
+  // ── decide for every coin AT ONCE, then apply the decisions IN ORDER ──
+  //
+  // The two halves have opposite requirements and used to share one sequential loop, which is why a
+  // pass took eight to ten seconds and every quote in it aged while the coins ahead were fetched.
+  //
+  // Deciding is pure of the book: it reads market data and runs maths, so seven coins can do it
+  // concurrently. Applying is NOT pure — accountBlock() reads the book to enforce one position per
+  // ticker, one direction per settlement window, and the position cap. If two coins both cleared
+  // those guards before either recorded a position, an account would take the same bet twice in one
+  // window, which is the failure that took $100 to $35.62 on 2026-08-26. So the fan-out stops at the
+  // decision and the application stays ordered.
+  //
+  // Bounded at four rather than seven: the data reads are unauthenticated and unretried, and a burst
+  // of twenty-one of them is how the 429s started.
+  const decided = await mapLimit(gl.COINS, COIN_CONCURRENCY, async coin => {
+    try { return { coin, d: await decideFor(coin) }; }
+    catch (e) { return { coin, err: e }; }
+  });
+
+  for (const res of decided) {
+    if (!res.ok) { noteSkip('error'); stats.lastError = `pass: ${res.error && res.error.message}`; continue; }
+    const { coin, d, err } = res.value;
+    if (err) { noteSkip('error'); stats.lastError = `${coin.sym}: ${err.message}`; continue; }
 
     if (d.skip) {
       noteSkip(d.skip);
@@ -1015,15 +1141,15 @@ async function runOnce() {
       }
     });
     log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
-      `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.style}`);
+      `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ${d.style}`);
 
     // Every account decides on the SAME decision object, concurrently but bounded. See mapLimit().
     const results = await mapLimit(accounts, ACCOUNT_CONCURRENCY, t => applyTo(t, d));
-    results.forEach((res, i) => {
+    results.forEach((r2, i) => {
       const t = accounts[i];
       const who = t.rec.tag || t.userId;
-      if (!res.ok) { log(`    ${who}: failed — ${res.error.message}`); return; }
-      const r = res.value;
+      if (!r2.ok) { log(`    ${who}: failed — ${r2.error.message}`); return; }
+      const r = r2.value;
       if (r.taken) {
         stats.entries++;
         log(`    ${who}: ${r.live ? 'LIVE' : 'paper'} ` +
@@ -1046,9 +1172,8 @@ async function runOnce() {
         });
       }
     });
-    // Spaced so seven markets do not arrive at Kalshi as a burst.
-    await new Promise(r => setTimeout(r, 300));
   }
+
   // Stamped at the END, so the panel's Scanner line means "a pass finished" rather than "a pass
   // started" — a loop that wedges mid-pass must show as stale, not as healthy.
   stats.lastPass = new Date().toISOString();
@@ -1078,5 +1203,6 @@ module.exports = {
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,
-  MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MAX_SPOT_AGE_MS, POLL_MS
+  MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
+  MAX_SPOT_AGE_MS, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };
