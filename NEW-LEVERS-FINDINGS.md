@@ -98,3 +98,39 @@ on **4 days** of a single directional regime is textbook curve-fitting, and
    ~30+ entries spanning both regimes.
 4. **Watch the NO/YES win-rate split live** as the health signal — a NO book win rate
    sliding under ~65% is the early warning that the market has turned against the tilt.
+
+## Take-profit A/B — the DirectionalBot's one transferable idea, tested
+
+The competitor broadcasts a stream of clean "cashout" wins, and the one mechanic behind
+them that looked worth stealing is **early take-profit** (sell at ~90¢ instead of holding
+to settlement). Bento's own live run of that bot (v1.75, Aggressive) went **50% win /
+−$3.25 / $7.88 balance** — the broadcasts are survivorship bias (a position only posts a
+"win" if it reaches 86¢+; the rest settle quietly at a loss). So the take-profit was
+tested honestly here rather than taken on faith.
+
+`research-takeprofit.js` holds the entry set FIXED (the same 68 live-gate entries) and
+varies only the exit, selling into the bid with a two-sided fee:
+
+| strategy | net | $/trade | win% | sd/trade | Sharpe* | rescued | capped |
+|---|---|---|---|---|---|---|---|
+| **HOLD (baseline)** | **+$416.59** | +$6.13 | 80.9% | $11.43 | **0.536** | 0 | 0 |
+| sell-all @85¢ | +$329.90 | +$4.85 | 83.8% | $9.86 | 0.492 | 2 | 50 |
+| sell-all @90¢ | +$343.22 | +$5.05 | 82.4% | $10.49 | 0.481 | 1 | 50 |
+| sell-all @95¢ | +$376.61 | +$5.54 | 80.9% | $11.17 | 0.496 | 0 | 47 |
+| sell-half @90¢ | +$379.76 | +$5.58 | 80.9% | $10.81 | 0.517 | 1 | 50 |
+| sell-half @95¢ | +$396.47 | +$5.83 | 80.9% | $11.30 | 0.516 | 0 | 47 |
+
+*Sharpe = mean/sd per trade (unitless variance-adjusted comparison, not annualized).
+
+**Every take-profit variant loses on both return and Sharpe.** The `rescued`/`capped`
+split is why: TP capped ~50 winners (forfeiting the last cents on trades that would have
+settled at $1) and rescued ~1 loser. At this gate the positions that climb to 90¢ are the
+ones that were going to win anyway — the bot enters **late, on confirmation** (55–65¢,
+high conf), when the outcome is nearly decided, so there is no end-of-window reversal to
+insure against. The DirectionalBot's early exit helps *it* because it enters **cheap at
+the onset** (~50¢) where reversal risk is real; the identical rule hurts a
+confirmation-late strategy. Same mechanic, opposite value.
+
+**Verdict: do not add take-profit. Hold-to-settlement is optimal for this entry style,
+and the competitor thread is closed — the only good idea it had (cheap entries) is already
+in the live gate.**
