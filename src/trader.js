@@ -20,10 +20,15 @@
  *
  * ── paper and live are the same bookkeeping ──
  *
- * A paper fill is recorded through the same book.open() as a real one, at the same price, with
- * the same fee arithmetic. Paper that fills at a better price than live would is a paper book
- * that flatters, and the whole point of running paper is to learn what live would have done.
- * The one honest difference is that paper cannot miss a fill.
+ * A paper fill is recorded through the same book.open() as a real one, with the same fee arithmetic
+ * — and, since 2026-08-29, the same execution risk. It waits the same fill grace, re-reads the same
+ * book, and MISSES when nobody is still offering inside the limit, at the price actually on offer
+ * rather than the quote the decision saw.
+ *
+ * That sentence used to read "the one honest difference is that paper cannot miss a fill", which was
+ * the largest remaining flattery in this file: six live orders missed on one day while every paper
+ * entry filled perfectly, so paper was scoring a strategy nobody could have executed. Paper is only
+ * worth running if it is trying to be wrong in the same ways live is.
  */
 
 const decide = require('./decide');
@@ -452,6 +457,42 @@ function record(t, d, fill) {
 }
 
 /**
+ * Would a live IOC order have filled, and at what price?
+ *
+ * ── why paper has to be able to MISS ──
+ *
+ * This module's own header claimed "the one honest difference is that paper cannot miss a fill".
+ * That difference is not honest, it is the largest remaining flattery in the paper book. A live
+ * order is immediate-or-cancel at quote + slippage: it fills only if somebody is still offering at
+ * or below that limit a couple of seconds later, and it fills at THEIR price, not at the quote the
+ * decision saw. Six live orders missed on 2026-08-29 and every paper entry that day filled
+ * perfectly, so paper was scoring a strategy nobody could have executed.
+ *
+ * Pure so it can be asserted: the caller re-reads the market and hands the ask over.
+ *
+ *   askNowCents  what our side is offered at when the order would have arrived, null if nothing is
+ *   limitCents   quote + the user's slippage allowance, the most we agreed to pay
+ *
+ * A missing ask is a MISS rather than a fill at the old price. Absence of an offer is not a price —
+ * the same rule sellPrice() already applies on the way out.
+ */
+function paperFill({ askNowCents, limitCents, quotedCents }) {
+  if (askNowCents == null || !Number.isFinite(askNowCents) || askNowCents <= 0) {
+    return { filled: false, why: 'nothing offered on our side by the time the order would have landed' };
+  }
+  if (askNowCents > limitCents) {
+    return {
+      filled: false,
+      why: `the book moved to ${Math.round(askNowCents)}c, past the ${limitCents}c limit`
+    };
+  }
+  // Filled at what was ACTUALLY offered. Better than the quote is a real outcome and is kept; the
+  // point is that paper stops assuming the quote it saw is the price it gets.
+  const paid = Math.min(askNowCents, limitCents);
+  return { filled: true, priceCents: +paid.toFixed(2), quotedCents, slippedCents: +(paid - quotedCents).toFixed(2) };
+}
+
+/**
  * Whether a blocked entry may still be recorded as paper.
  *
  * Paper exists so a decision the bot made is never lost from the record — that is why a live
@@ -565,10 +606,30 @@ async function applyTo(t, d) {
     // decisions feed still explains what happened — a daily stop that stops trading silently is
     // indistinguishable from a bot that has died.
     if (!paperAllowed(t)) return { taken: false, why: block || 'armed — paper is off' };
-    const fee = decide.fee(d.price, shares);
+
+    // ── the same execution a live order would have had ──
+    //
+    // Waits the user's own fill grace, re-reads the book, and fills only if somebody is still
+    // offering inside the limit. Paper that always fills at the quote is a paper book that flatters,
+    // and the whole point of running paper is to learn what live would have done.
+    const slip = Number(t.get('slippageCents')) || 0;
+    const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
+    await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
+    const fresh = await getMarket(d.market.ticker);
+    const askNow = fresh
+      ? parseFloat(d.side === 'YES' ? fresh.yes_ask_dollars : fresh.no_ask_dollars) * 100
+      : null;
+    const sim = paperFill({ askNowCents: askNow, limitCents, quotedCents: d.pricePct });
+    if (!sim.filled) {
+      await notify.missedFill(t, d, { limitCents, nowCents: askNow == null ? null : Math.round(askNow) });
+      return { taken: false, why: `paper missed the fill — ${sim.why}` };
+    }
+    const price = +(sim.priceCents / 100).toFixed(4);
+    const fee = decide.fee(price, shares);
     const p = record(t, d, {
-      contracts: shares, priceCents: d.pricePct, price: d.price,
-      cost: +(shares * d.price).toFixed(2), fee, live: false, requested: shares
+      contracts: shares, priceCents: sim.priceCents, price,
+      cost: +(shares * price).toFixed(2), fee, live: false, requested: shares,
+      slippageCents: sim.slippedCents
     });
     await notify.entry(t, p, { live: false });
     return { taken: true, live: false, position: p, why: block || 'paper' };
@@ -721,7 +782,7 @@ async function closePosition(t, p, sell, reason) {
       proceeds: +(n * avg).toFixed(4),
       fee: charged > 0 ? +charged.toFixed(2) : kt.feeDollars(n, avg), reason
     });
-    t.save(); t.noteRealised(closed.pnl);
+    t.save(); t.noteRealised(closed.pnl, closed.live === true);
     return { sold: true, position: closed };
   }
 
@@ -729,7 +790,7 @@ async function closePosition(t, p, sell, reason) {
     contracts, priceCents: Math.round(sell * 100), price: +sell.toFixed(4),
     proceeds, fee: exitFee, reason
   });
-  t.save(); t.noteRealised(closed.pnl);
+  t.save(); t.noteRealised(closed.pnl, closed.live === true);
   return { sold: true, position: closed };
 }
 
@@ -795,7 +856,7 @@ async function checkExits() {
 
       const won = (p.side === 'YES' && result === 'yes') || (p.side === 'NO' && result === 'no');
       const closed = book.settle(t.rec.book, p, won);
-      t.save(); t.noteRealised(closed.pnl);
+      t.save(); t.noteRealised(closed.pnl, closed.live === true);
       log(`  ${won ? '✅' : '❌'} ${t.rec.tag || t.userId}: ${p.sym} ${p.direction} ` +
         `@${p.priceCents}c → ${won ? '100' : '0'}c  ${closed.pnl >= 0 ? '+' : ''}${closed.pnl}`);
       activity.push({
@@ -984,7 +1045,8 @@ function stop() { running = false; if (timer) clearTimeout(timer); timer = null;
 
 module.exports = {
   activity,
-  sharesFor, liveOrPaperBalance, paperAllowed, mapLimit, shardCash, refreshBalances, reconcileFills,
+  sharesFor, liveOrPaperBalance, paperAllowed, paperFill, mapLimit, shardCash, refreshBalances,
+  reconcileFills,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats,

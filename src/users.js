@@ -54,7 +54,11 @@ function blankUser(id) {
     book: book.blank(),
     // Realised P&L per ET day, for the daily stop. Keyed by date so yesterday's loss cannot
     // trip today's limit.
-    day: { date: null, realised: 0, n: 0 },
+    // Realised P&L per ET day, for the daily stop. Keyed by date so yesterday's loss cannot
+    // trip today's limit. `live` is tracked APART from the total: the stop guards real money, and a
+    // paper book sized off a different bankroll would otherwise halt live trading with imaginary
+    // losses — or, worse, mask real ones with imaginary wins.
+    day: { date: null, realised: 0, n: 0, live: 0, liveN: 0 },
     balance: null,
     balanceAt: null,
     // ── the owner's switch, and why it is on the RECORD and not in settings ──
@@ -200,13 +204,25 @@ function tenant(userId, { create = false } = {}) {
     /** Realised P&L today, resetting itself when the ET date rolls. */
     day() {
       const d = today();
-      if (rec.day.date !== d) { rec.day = { date: d, realised: 0, n: 0 }; save(); }
+      if (rec.day.date !== d) { rec.day = { date: d, realised: 0, n: 0, live: 0, liveN: 0 }; save(); }
+      // A record written before the live/paper split has no `live` field; treated as 0 rather than
+      // undefined so the stop arithmetic cannot go NaN and silently stop refusing.
+      if (typeof rec.day.live !== 'number') { rec.day.live = 0; rec.day.liveN = 0; }
       return rec.day;
     },
-    noteRealised(pnl) {
+    /**
+     * Record a realised result. `isLive` decides whether it counts towards the daily stop.
+     *
+     * Both figures are kept because both are wanted: the total is what the panel shows for the day,
+     * and the live half is the only one the stop may judge. Pooling them let a -$105 paper day halt
+     * real trading, and would have let a +$100 paper day hide a -$50 live one.
+     */
+    noteRealised(pnl, isLive = false) {
       const day = t.day();
-      day.realised = +(day.realised + (Number(pnl) || 0)).toFixed(4);
+      const v = Number(pnl) || 0;
+      day.realised = +(day.realised + v).toFixed(4);
       day.n++;
+      if (isLive) { day.live = +(day.live + v).toFixed(4); day.liveN++; }
       save();
       return day;
     },
@@ -261,10 +277,12 @@ function tenant(userId, { create = false } = {}) {
       if (!rec.settings.armed) return 'not armed';
       const stop = rec.settings.dailyStopLoss;
       const day = t.day();
-      if (stop != null && day.realised <= -Math.abs(stop)) {
+      // day.live, NOT day.realised. The stop exists to protect real money, so it may only be tripped
+      // by real money — see noteRealised().
+      if (stop != null && day.live <= -Math.abs(stop)) {
         // Says the two numbers, not just that a limit was hit. A refusal that does not show
         // its arithmetic is the thing that wasted an evening on the other bot.
-        return `daily stop hit — today is ${money(day.realised)} against a ` +
+        return `daily stop hit — live is ${money(day.live)} today against a ` +
           `${money(Math.abs(stop))} limit. It resets at midnight ET; nothing open was sold.`;
       }
       return null;
