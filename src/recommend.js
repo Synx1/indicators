@@ -133,25 +133,6 @@ function forAccount(a) {
     });
   }
 
-  // ── Kelly sizing: size by the EDGE rather than by a flat share ──
-  //
-  // Reconstructed from the BETSSSSS $100→$457 challenge and backtested with a real fee model
-  // (research-challenge-config.js): 3.1x on $30 at the live gate, 2.6x once 2¢ of slippage is charged,
-  // $11 peak drawdown — against roughly 1.8x for flat sizing on the SAME 54 trades. It is also more
-  // conservative per trade than the flat default, because maxFraction caps it at 7%.
-  const kellyOn = a.kellySizing === true;
-  add({
-    key: 'kellySizing', label: 'Kelly sizing',
-    current: kellyOn ? 'on' : 'off', recommended: 'on',
-    ok: kellyOn, severity: kellyOn ? 'note' : 'warn',
-    why: 'Flat sizing bets the same share of the balance on a 25-point edge and a 2-point one. Kelly ' +
-      'bets in proportion to the edge. Backtested over 1806 markets: 3.1x on ' +
-      (bank ? money(bank) : 'a small bankroll') + ' at the live gate (2.6x with 2¢ of slippage), ' +
-      'against about 1.8x flat on the SAME 54 trades — and it is MORE conservative per trade, since ' +
-      'Max per trade caps it at ' + pctStr(0.07) + '.',
-    note: autoOn ? null : 'Needs Auto size on; it is a sizing mode, not a separate switch.'
-  });
-
   // ── risk per trade: quarter-Kelly at the LIVE win rate, not the backtest's ──
   //
   // Kelly at the backtest's 83.9% is ~61% of bankroll; at the live book's 73% it is ~34%. The default
@@ -169,11 +150,9 @@ function forAccount(a) {
     why: `Kelly-optimal is ${pctStr(kBack)} at the backtest's ${pctStr(WR_BACKTEST)} win rate but only ` +
       `${pctStr(kLive)} at the live book's ${pctStr(WR_LIVE)}. ${pctStr(recRisk)} is quarter-Kelly against ` +
       `the pessimistic one, which is the setting that survives being wrong about which rate is real.`,
-    note: kellyOn
-      ? 'Not read while Kelly sizing is on — Kelly fraction and Max per trade decide the size instead.'
-      : (risk > kLive
-        ? `${pctStr(risk)} is ABOVE full Kelly at the live win rate — over-betting a real edge still loses money.`
-        : 'Raise it only once live trades, not the backtest, support the higher rate.')
+    note: risk > kLive
+      ? `${pctStr(risk)} is ABOVE full Kelly at the live win rate — over-betting a real edge still loses money.`
+      : 'Raise it only once live trades, not the backtest, support the higher rate.'
   });
 
   // ── the daily stop, which is the only setting that ends a bad night ──

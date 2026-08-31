@@ -291,8 +291,87 @@ rather than whether the signal was right.
 
 `enough` is gated at 20 settled trades per band. Under that, no verdict is claimed.
 
-**This is the move because it changes the class of every future decision.** The ceiling question stops
-being my haircut assumption and becomes a measurement. Same for anything else worth shadowing later.
+## 2026-08-31 (last) — the indicator review, and the hour-of-day trap
+
+Two questions from the live book. Both answers are negative, and the second one is the most useful
+finding of the day.
+
+### The four indicators: three of them do nothing
+
+`research-indicators.js`, over the 61 live-gate entries:
+
+| indicator | agrees | win% | dissents | win% | lift |
+|---|---|---|---|---|---|
+| RSI | 57 | 86.0% | **4** | 75.0% | +11.0pp |
+| EMA | 52 | 84.6% | 9 | 88.9% | **−4.3pp** |
+| **BB** | **61** | 85.2% | **0** | — | — |
+| VWAP | 60 | 85.0% | **1** | 100.0% | −15.0pp |
+
+**Bollinger never dissents once in 61 trades.** If spot is on the right side of the trend it is always
+on the right side of a 20-bar mean, so the check is a free pass occupying a slot — `3 of 4` really
+means `2 of 3 that can vary`. VWAP and RSI are nearly as dead (1 and 4 dissents). EMA is the only one
+that varies meaningfully, and its lift is *negative*.
+
+### No replacement is worth making
+
+Candidates were chosen for INDEPENDENCE from close price, since RSI/EMA/VWAP all read the same series.
+MACD showed the largest raw lift (+17.9pp), so it was tested properly — swapped into the dead slot,
+`MIN_CONFIRM` still 3:
+
+| fourth slot | n | win% | net | maxDD | net/DD |
+|---|---|---|---|---|---|
+| **BB (today)** | 61 | 85.2% | **+$439.53** | $39 | **11.2** |
+| MACD | 56 | 85.7% | +$397.71 | $39 | 10.1 |
+| OBV | 56 | 85.7% | +$409.04 | $39 | 10.4 |
+| ROC5 | 58 | 86.2% | +$426.06 | $39 | 10.8 |
+| VOLUP | 51 | 86.3% | +$382.12 | $39 | 9.7 |
+| STOCH | 60 | 85.0% | +$423.25 | $39 | 10.7 |
+
+Every swap: fewer trades, marginally higher win rate, **lower net and lower net/DD**. And note the
+drawdown is **$39 in every single variant** — no indicator filter touches it at all, because the
+drawdown comes from one cluster of correlated losses rather than from signal quality. **Nothing in the
+indicator suite ships.** It is not where the problem is.
+
+### The hour-of-day filter would have been a disaster
+
+The live hourly table shows **7 AM–1 PM ET at −$203 across 41 trades** and 2 PM–5 PM at +$133 across
+36. That looks like the most valuable filter available. The corpus says the exact opposite:
+
+| session (ET) | n | win% | net | $/trade |
+|---|---|---|---|---|
+| overnight 12–3am | 9 | 88.9% | +$78.87 | +$8.76 |
+| early 3–7am | 7 | 85.7% | +$46.62 | +$6.66 |
+| **US open 7am–1pm** | 17 | **94.1%** | **+$159.22** | **+$9.37** |
+| afternoon 1–5pm | 8 | **62.5%** | +$1.74 | +$0.22 |
+| evening 5pm–12am | 20 | 85.0% | +$153.08 | +$7.65 |
+
+**The corpus's BEST session is the live book's worst, and its worst is the live book's best.** Shipping
+an hours filter off the live table would have banned the single most profitable window in the backtest.
+The hourly pattern is regime noise at ~6 trades an hour, exactly as the dashboard's own note warns.
+
+### One real finding: volatility helps
+
+| ATR quartile | n | win% | $/trade |
+|---|---|---|---|
+| calmest | 15 | 73.3% | +$4.53 |
+| second | 15 | 86.7% | +$7.42 |
+| third | 15 | 86.7% | +$7.88 |
+| **most volatile** | 16 | **93.8%** | **+$8.88** |
+
+Monotonic across all four quartiles, with a mechanism: this strategy needs spot to travel away from the
+strike, and a calm market pins near it and settles as a coin flip. It is the same effect `MIN_GAP_PCT`
+addresses from the other direction. Not shipped as a gate because the calmest quartile is still
+profitable at +$4.53/trade, so filtering it costs net — but it is the most promising untested lever
+left, and unlike the clock it is a property of the market rather than of one week.
+
+### Kelly sizing removed
+
+Reverted at Bento's request. `kellySizing`, `kellyFraction`, `maxFraction` and `maxPortfolioFraction`
+are gone from the schema, `kellyShares()` from trader.js, and the row from the setup sheet.
+`autoShares` + `riskPerTrade` is the sizing path again. The Kelly *formula* stays in recommend.js,
+where it derives the recommended 9% flat risk — that is arithmetic for choosing a number, not a sizing
+mode.
+
 
 
 

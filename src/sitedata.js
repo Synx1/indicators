@@ -394,7 +394,6 @@ function recommendations() {
         who: t.rec.tag || t.userId,
         bankroll, live, armed: t.get('armed') === true,
         shares: t.get('shares'), autoShares: t.get('autoShares') === true,
-        kellySizing: t.get('kellySizing') === true,
         riskPerTrade: t.get('riskPerTrade'), dailyStopLoss: t.get('dailyStopLoss'),
         maxOpen: t.get('maxOpen'), maxPerDir: t.get('maxPerDir'),
         maxOrderCost: t.get('maxOrderCost'), slippageCents: t.get('slippageCents'),

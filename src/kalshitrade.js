@@ -508,7 +508,7 @@ function forUser(authProvider) {
    * acquired minutes after the read that justified it, once the window has shut and
    * the edge is gone.
    *
-   * Fill-or-kill is deliberately not used: a partial fill of a Kelly-sized position is
+   * Fill-or-kill is deliberately not used: a partial fill of an auto-sized position is
    * a smaller position, which is fine, whereas rejecting the whole order because one
    * contract was missing throws away a good entry over a rounding detail.
    *
