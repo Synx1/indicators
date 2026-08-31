@@ -211,7 +211,7 @@ function renderDecisions(d, pub) {
     '<span class=n>' + v + '</span>').join('') + '</div>' : '';
 
   const mk = '<div class=mkt style="margin-bottom:16px">' + pub.markets.map(m =>
-    '<span class="' + (m.on ? 'on' : '') + '">' + m.sym + '</span>').join('') + '</div>';
+    '<span class="' + (m.on ? 'on' : '') + '">' + esc(m.sym) + '</span>').join('') + '</div>';
 
   if (!d.events.length) {
     $('decbody').innerHTML = mk + '<div class=empty>Nothing decided yet — the first pass runs within 20 seconds of startup.</div>';
@@ -313,7 +313,7 @@ function renderAccounts(d) {
         '<td class="num ' + cls(a.realised) + '">' + signed(a.realised) + '</td>' +
         '<td class=num>' + money(a.peak) +
           (a.fromPeak > 0.005 ? '<div class="faint" style="font-size:11px">-' + a.fromPeak.toFixed(2) + ' off</div>' : '') + '</td>' +
-        '<td class="num ' + cls(a.today.net) + '">' + signed(a.today.net) + '</td>' +
+        '<td class="num ' + cls((a.today || {}).net) + '">' + signed((a.today || {}).net) + '</td>' +
         '<td class=num>' + a.closed + '</td>' +
         '<td class=num>' + (a.closed ? pct(a.hit) : '—') + '</td>' +
         '<td class=num>' + a.open + (a.atRisk ? '<div class="faint" style="font-size:11px">' + money(a.atRisk) + '</div>' : '') + '</td></tr>';
