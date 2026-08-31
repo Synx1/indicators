@@ -185,3 +185,70 @@ count/direction in the message) and mutation-checked (>=/>, side filter, null gu
 trade, not a free win. A higher win rate here is bought with lower total profit, because the bot is
 already right 81% of the time and the leak was never accuracy.**
 
+## 2026-08-31 (later) — strengthening BTC/ETH/SOL: the min-gap floor
+
+Bento asked to strengthen the three weakest coins. `research-coindetail.js` dissected all 19 of their
+live-gate entries and the losers were **not** lower-confidence or lower-confirm than the winners:
+
+| metric | winners | losers |
+|---|---|---|
+| entry price | 62.5¢ | **55.2¢** |
+| confidence | 82.8 | 81.8 |
+| confirms | 3.85 | 4.00 |
+| **\|gap\| from strike** | 0.044% | **0.033%** |
+
+So the losing trades were the ones where **spot was sitting on the strike**. That is a mechanism, not
+bad luck. `z = gap / sigma`, `sigma = realizedVol(10) * sqrt(minutesLeft)` — when crypto goes quiet
+and vol collapses (~1e-4 on this corpus), sigma goes tiny and a gap of 0.02% divides out to `z = 1.6`,
+i.e. a stated **94% on a coin flip**. `MIN_CONF` cannot screen it, because confidence is HIGHEST
+exactly when sigma is smallest. `LOSS-AUTOPSY.md` saw the symptom and blamed sub-80 confidence; the
+actual cause is the near-zero gap.
+
+A vol *floor* was tried for this before and reverted (halved profit) — it inflated sigma everywhere
+and destroyed the legitimate high-conviction reads too. The direct form works (`research-mingap.js`):
+
+| minGap | kept | net | win% | $/trade | 1st half | 2nd half (RALLY) |
+|---|---|---|---|---|---|---|
+| **none** | 68 | +$416.59 | 80.9% | +$6.13 | +$329.51 (94.1%) | +$87.08 (67.6%) |
+| **0.03%** | 62 | **+$434.67** | **83.9%** | +$7.01 | +$329.51 (94.1%) | **+$105.16 (71.4%)** |
+| 0.04% | 55 | +$435.84 | 87.3% | +$7.92 | +$314.41 (96.7%) | +$121.43 (76.0%) |
+| 0.05% | 48 | +$350.47 | 85.4% | +$7.30 | +$280.51 (96.3%) | +$69.96 (71.4%) |
+
+The weak three specifically: **19 trades / 68.4% / +$37.53 → 13 trades / 76.9% / +$55.61.** ETH's
+−$21.97 disappears entirely (all three of its entries were inside the floor). The 13 trades the floor
+drops won **53.8%** — coin flips, exactly as the mechanism predicts.
+
+**Why this one shipped when the others did not:** it improves the WEAKER half (the Aug 7-8 rally,
+the closest thing in the data to what hurt the live book) while leaving the good half untouched —
+the same test `MIN_MINUTES 8` had to pass. And unlike a tuned dial it is defensible without the
+backtest at all: at gap→0 the true probability is 50% whatever the arithmetic reports.
+
+0.03 rather than the marginally better 0.04 because 0.04 cuts BTC from 8 entries to 2, which is
+closer to disabling a coin than filtering it.
+
+Shipped as `MIN_GAP_PCT = 0.03` in src/trader.js (a module constant, like MIN_CONF — this is what a
+signal IS, not a risk appetite), with skip reason `on-strike`. Reverting is one line.
+
+### Caveats, stated plainly
+
+- Still **one four-day corpus**, one regime. The mechanism is sound; the exact threshold is not
+  precision-tested and 0.025-0.05 all look similar.
+- 13 dropped trades is a small sample for the 53.8% figure. The *direction* is what the mechanism
+  predicts; the magnitude is noisy.
+- BTC and DOGE each lose a couple of good trades to the floor (−$9.85 / −$10.02 net). The gain is
+  concentrated in ETH and the rally half.
+
+### Also shipped: the Coins tab
+
+`/api/state` now carries a per-coin scoreboard (settled, W/L, win%, net, per-trade, open) and the
+dashboard renders it as a **Coins** tab. Aggregate across accounts, so it names nobody and stays on
+the open route.
+
+The load-bearing column is **trust** — `thin` under 10 settled, `fair` under 30, `good` at 30+ — and
+it renders before the win rate on purpose. Every previous attempt to pick coins off this bot's
+numbers was defeated by sample size: the two coins showing 100% in the backtest had 7 and 9 trades,
+and one of them was a net LOSER under the previous gate. The headline refuses to name a best market
+until some coin has 10 settled trades. That is the answer to "what are the best markets": not the
+backtest's ranking, but this table as real trades land.
+
+

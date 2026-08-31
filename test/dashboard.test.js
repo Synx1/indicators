@@ -141,11 +141,72 @@ ok(H.every(b => Number.isFinite(b.net) && Number.isFinite(b.fees)), 'every bucke
 ok(Math.abs(H.reduce((a, b) => a + b.net, 0) - 9) < 1e-9, 'the buckets sum to the total net');
 ok(H.reduce((a, b) => a + b.taken, 0) === h.totalClosed, 'the bucket counts sum to totalClosed');
 
-// ── 7. the page renders these payloads without throwing ──────────
+// ── 7. the per-coin scoreboard ────────────────────────────────────
+//
+// The reason this table exists is that every attempt to rank coins off this bot's numbers has been
+// defeated by sample size — two backtest coins showed 100% on 7-9 trades and one was a net LOSER
+// under the previous gate. So `trust` is the load-bearing field, and its BOUNDARIES are what a
+// mutation would move: shifting `n < 10` to `n < 2` would label a two-trade coin a measurement.
+const gl = require('../src/markets');
+const coinsOf = positions => { withBook(positions); return data.publicState().coins; };
+const bySym = (rows, sym) => rows.find(c => c.sym === sym);
+
+// Every tradeable coin appears even with no trades, so a missing row means "not traded" not "hidden".
+let C = coinsOf([]);
+for (const sym of gl.SYMS) {
+  const r = bySym(C, sym);
+  ok(r, `${sym} has a row even before it has traded`);
+  eq(r.trust, 'none', `${sym} with no trades is trust:none`);
+  eq(r.hit, null, `${sym} with no trades has a null hit rate, not 0`);
+  eq(r.n, 0, `${sym} starts at zero settled`);
+}
+
+// The trust boundaries, at the exact edges.
+const nTrades = (n, wins, sym = 'BTC') => Array.from({ length: n }, (_, i) => pos({
+  seq: i, sym, pnl: i < wins ? 2 : -3, outcome: i < wins ? 'WIN' : 'LOSS',
+  at: new Date(T0 - i * 60000).toISOString(), exitAt: new Date(T0 - i * 60000).toISOString()
+}));
+eq(bySym(coinsOf(nTrades(9, 9)), 'BTC').trust, 'thin', '9 trades is THIN — a 100% win rate here is not a measurement');
+eq(bySym(coinsOf(nTrades(10, 9)), 'BTC').trust, 'fair', '10 trades is the boundary into fair');
+eq(bySym(coinsOf(nTrades(29, 20)), 'BTC').trust, 'fair', '29 is still only fair');
+eq(bySym(coinsOf(nTrades(30, 20)), 'BTC').trust, 'good', '30 trades is the boundary into good');
+
+// The arithmetic must equal the rows it summarises, per coin.
+C = coinsOf([...nTrades(5, 3, 'BTC'), ...nTrades(4, 1, 'ETH')]);
+const btc = bySym(C, 'BTC'), eth = bySym(C, 'ETH');
+eq(btc.n, 5, 'BTC counts only BTC positions');
+eq(eth.n, 4, 'ETH counts only ETH positions');
+ok(btc.wins === 3 && btc.losses === 2, 'BTC is 3W/2L');
+ok(Math.abs(btc.hit - 3 / 5) < 1e-12, 'BTC hit is exactly wins/settled');
+ok(Math.abs(btc.net - (3 * 2 - 2 * 3)) < 1e-9, 'BTC net is the exact sum of its rows');
+ok(Math.abs(eth.net - (1 * 2 - 3 * 3)) < 1e-9, 'ETH net is the exact sum of its rows');
+ok(Math.abs(btc.per - btc.net / btc.n) < 1e-9, 'per-trade is net/settled');
+// A pnl of exactly 0 is not a win here either, matching book.stats and the grading suite.
+eq(bySym(coinsOf([pos({ sym: 'SOL', pnl: 0, outcome: 'WIN' })]), 'SOL').wins, 0,
+  'a zero-pnl trade counts as settled but NOT as a win');
+// Open positions are counted but never graded.
+C = coinsOf([pos({ sym: 'SOL', outcome: undefined, pnl: null, exitAt: null })]);
+eq(bySym(C, 'SOL').open, 1, 'an open position shows in the open column');
+eq(bySym(C, 'SOL').n, 0, 'and is NOT counted as settled');
+// Worst-net first, with untraded coins last, so a bleeding coin is the first thing read.
+C = coinsOf([...nTrades(3, 3, 'BTC'), ...nTrades(3, 0, 'ETH')]);
+const traded = C.filter(c => c.n > 0);
+eq(traded[0].sym, 'ETH', 'the worst net sorts first');
+ok(C.filter(c => c.n === 0).length === gl.SYMS.length - 2, 'and untraded coins sort to the end');
+// An unknown symbol on a legacy position must still be reported, not dropped or crashed on.
+ok(bySym(coinsOf([pos({ sym: undefined })]), '?'), 'a position with no sym lands in a "?" row rather than vanishing');
+
+// ── 8. the page renders these payloads without throwing ──────────
 const page = require('../src/sitepage');
 const html = page();
 ok(/data-t=hours/.test(html), 'the Hours tab button is in the markup');
 ok(/<section id=s-hours/.test(html), 'the Hours section exists for it to switch to');
+ok(/data-t=coins/.test(html), 'the Coins tab button is in the markup');
+ok(/<section id=s-coins/.test(html), 'the Coins section exists for it to switch to');
+// The tab-switch list must name every section, or clicking a tab leaves the old one visible.
+const tabList = html.match(/\[([^\]]*)\]\.forEach\(t =>\s*\$\('s-' \+ t\)/);
+ok(tabList && /'coins'/.test(tabList[1]),
+  'the Coins tab is in the switch list — a section absent from it never hides the previous one');
 ok(/Direction now/.test(html) && /DOWN book/.test(html), 'both direction cells are rendered');
 for (const m of html.matchAll(/\$\(['"]([\w-]+)['"]\)/g)) {
   ok(new RegExp('\\bid=' + m[1] + '\\b').test(html), `$("${m[1]}") refers to an element that exists`);

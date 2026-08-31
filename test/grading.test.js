@@ -129,8 +129,50 @@ eq(trader.MIN_CONFIRM, 3, 'three of the four indicators must agree');
 eq(trader.MIN_MINUTES, 8, 'no entry inside eight minutes');
 eq(trader.MAX_MINUTES, 14, 'and none earlier than fourteen');
 eq(trader.MAX_SPOT_AGE_MS, 45000, 'a spot older than 45s is not worth trading on');
+eq(trader.MIN_GAP_PCT, 0.03, 'spot must sit at least 0.03% from the strike');
 checks++; assert.ok(trader.MIN_PRICE < trader.MAX_PRICE, 'the price band is the right way round');
 checks++; assert.ok(trader.MIN_MINUTES < trader.MAX_MINUTES, 'the clock window is the right way round');
+
+// ── 4b. the min-gap floor: distance before conviction ────────────
+//
+// The degenerate case this exists for: z = gap/sigma, and when realizedVol collapses sigma goes tiny,
+// so a gap of 0.02% still divides out to a large z and the model reports 85% on a market where spot
+// is sitting ON the strike. At gap→0 the true probability is 50% whatever the arithmetic says, so
+// MIN_CONF cannot screen this — confidence is HIGHEST exactly when sigma is smallest.
+//
+// The boundary is asserted from both sides because `>=` vs `>` is one keystroke, and Math.abs is one
+// deletion — without it every DOWN read (spot BELOW strike, so a negative gap) would fail the floor
+// and the bot would stop taking its structural side entirely.
+const GAP = trader.MIN_GAP_PCT / 100;
+eq(trader.gapOK(100, 100), false, 'spot exactly ON the strike is refused — that is a coin flip, not a read');
+// The inclusive boundary, on a pair whose gap lands on exactly 0.03 in binary floating point. Most
+// pairs do not (100 -> 100.03 reads back as 0.030000000000001137), and on those `>=` and `>` cannot be
+// told apart — so a mutation from `>=` to `>` survives unless the assertion is made HERE.
+eq(Math.abs((10003 - 10000) / 10000) * 100, trader.MIN_GAP_PCT, 'crafted a pair exactly on the floor');
+eq(trader.gapOK(10003, 10000), true, 'exactly at the floor CLEARS it — the boundary is inclusive');
+eq(trader.gapOK(9997, 10000), true, 'and inclusive on the DOWN side too');
+eq(trader.gapOK(100 * (1 + GAP * 0.999), 100), false, 'a hair under the floor is refused');
+eq(trader.gapOK(100 * (1 + GAP * 10), 100), true, 'well above the floor passes');
+// The same distances BELOW the strike, which is the side this bot mostly trades.
+eq(trader.gapOK(100 * (1 - GAP * 1.001), 100), true, 'the floor is symmetric — a DOWN read at the same distance clears');eq(trader.gapOK(100 * (1 - GAP * 0.999), 100), false, 'and a DOWN read just inside it is refused');
+eq(trader.gapOK(100 * (1 - GAP * 10), 100), true, 'a far DOWN read clears');
+// Garbage must fail CLOSED. `NaN < floor` is false, so an unguarded comparison would read an
+// unreadable spot as a clean, distant strike and trade on it.
+for (const junk of [NaN, undefined, null, Infinity, -Infinity, '100', {}, '']) {
+  eq(trader.gapOK(junk, 100), false, `a ${JSON.stringify(junk)} spot never clears the gap floor`);
+  eq(trader.gapOK(100, junk), false, `a ${JSON.stringify(junk)} strike never clears the gap floor`);
+}
+eq(trader.gapOK(100, 0), false, 'a zero strike is refused rather than dividing by zero');
+// Scale independence: the floor is a percentage, so it must behave identically on a $0.20 coin and a
+// $100,000 one. A DOGE gap of 0.03% is fractions of a cent; an absolute floor would ban DOGE outright.
+// Tested a hair either side rather than exactly ON the boundary, because `strike * (1 + GAP)` does not
+// round-trip through binary floating point at every scale — 3.5 * 1.0003 reads back as 0.029999…%.
+// That lands on the refusing side, which is the harmless direction for a guard, and is why the
+// inclusive-boundary assertion above is made at a scale where the arithmetic is exact.
+for (const strike of [0.2, 3.5, 240, 64978.38]) {
+  eq(trader.gapOK(strike * (1 + GAP * 1.001), strike), true, `the floor is relative, not absolute (strike ${strike})`);
+  eq(trader.gapOK(strike * (1 + GAP * 0.5), strike), false, `and it still bites at half the distance (strike ${strike})`);
+}
 
 // ── 5. the entry gate cannot be fooled by a NaN ─────────────────
 //

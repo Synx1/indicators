@@ -66,6 +66,17 @@ function publicState() {
     if (s === 'YES') return dir.up;
     return null;
   };
+  // Per-coin scoreboard. The backtest ranked the coins (BNB the workhorse, ETH negative, XRP/HYPE
+  // 100% on ~8 trades) but every one of those numbers came from ONE four-day corpus, and two of them
+  // flipped sign when the gate changed. So the useful thing is not the backtest's ranking — it is
+  // watching which coins hold up as REAL trades land, which is what this publishes. Aggregate across
+  // accounts, so it names nobody and is safe on the open route.
+  const coins = new Map();
+  const coinOf = sym => {
+    const k = String(sym || '?').toUpperCase();
+    if (!coins.has(k)) coins.set(k, { sym: k, n: 0, wins: 0, net: 0, open: 0, live: 0, lastAt: null });
+    return coins.get(k);
+  };
   for (const t of all) {
     const b = t.rec.book;
     const s = book.stats(b);
@@ -75,9 +86,15 @@ function publicState() {
     for (const p of book.openPositions(b)) {
       const acc = sideOf(p);
       if (acc === dir.down) dir.open.down++; else if (acc === dir.up) dir.open.up++;
+      coinOf(p.sym).open++;
     }
     for (const p of book.closedPositions(b)) {
       if (p.pnl == null) continue;                       // win by SIGN of realised P&L, as book.stats does
+      const c = coinOf(p.sym);
+      c.n++; c.net += p.pnl; if (p.pnl > 0) c.wins++;
+      if (p.live) c.live++;
+      const at = new Date(p.exitAt || p.at || 0).getTime();
+      if (Number.isFinite(at) && at > 0 && (c.lastAt == null || at > c.lastAt)) c.lastAt = at;
       const acc = sideOf(p);
       if (!acc) continue;
       acc.n++; acc.net += p.pnl; if (p.pnl > 0) acc.wins++;
@@ -124,6 +141,20 @@ function publicState() {
     down: { ...byDir(dir.down), recentHit: rDown.hit, recentN: rDown.n },
     warn: rDown.hit != null && rDown.n >= 8 && rDown.hit < 0.65
   };
+  // Every tradeable coin appears, including ones with no closed trades yet, so an absent row means
+  // "not traded" rather than "not shown". `trust` is deliberately conservative: a hit rate on fewer
+  // than 10 settled trades is not a measurement, and saying so on the page is the whole point —
+  // the backtest's two 100% coins were 7 and 9 trades, and one of them was a net LOSER under the
+  // previous gate. Sorted worst-net first so a bleeding coin is the first thing read.
+  for (const sym of gl.SYMS) coinOf(sym);
+  const coinRows = [...coins.values()].map(c => ({
+    sym: c.sym, n: c.n, wins: c.wins, losses: c.n - c.wins,
+    hit: c.n ? c.wins / c.n : null,
+    net: +c.net.toFixed(2), per: c.n ? +(c.net / c.n).toFixed(2) : null,
+    open: c.open, live: c.live, lastAt: c.lastAt,
+    trust: c.n === 0 ? 'none' : (c.n < 10 ? 'thin' : (c.n < 30 ? 'fair' : 'good')),
+    on: gl.isEnabled(c.sym)
+  })).sort((a, b) => (a.n === 0) - (b.n === 0) || a.net - b.net);
   return {
     asOf: Date.now(),
     name: NAME,
@@ -157,7 +188,8 @@ function publicState() {
     },
     instance: INSTANCE,
     skips: activity.skipCounts(),
-    direction
+    direction,
+    coins: coinRows
   };
 }
 

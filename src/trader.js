@@ -118,6 +118,18 @@ const MIN_CONFIRM = 3;
 function confOK(confidence) {
   return Number.isFinite(confidence) && confidence >= MIN_CONF;
 }
+/**
+ * Is spot far enough from the strike for the reading to be meaningful? See MIN_GAP_PCT.
+ *
+ * A named predicate for the same reason confOK is one — a mutation from `>=` to `>` or a dropped
+ * Math.abs would silently change which trades are taken, and both are one keystroke. The finite
+ * check refuses a garbage spot or strike rather than letting NaN sail through: `NaN < floor` is
+ * false, so an unguarded comparison would treat unreadable inputs as a clean, distant strike.
+ */
+function gapOK(spot, strike) {
+  if (!Number.isFinite(spot) || !Number.isFinite(strike) || strike === 0) return false;
+  return Math.abs((spot - strike) / strike) * 100 >= MIN_GAP_PCT;
+}
 const MIN_PRICE = 0.25;
 /**
  * The dearest this bot will pay. 0.80 until 2026-08-30 — see MIN_CONF above for why it moved and
@@ -154,6 +166,42 @@ const MAX_MINUTES = 14;
  * wrong number. Never falls back to the candle close — that fallback is precisely the defect.
  */
 const MAX_SPOT_AGE_MS = 45 * 1000;
+/**
+ * How far spot must sit from the strike before the model's confidence is allowed to mean anything.
+ *
+ * This is a guard against a DEGENERATE CASE, not a tuned dial, and it is the only "raise the win
+ * rate" lever that survived 2026-08-31's testing. The model computes
+ *
+ *   z = gap / sigma,   sigma = realizedVol(10) * sqrt(minutesLeft)
+ *
+ * so when crypto goes quiet and realizedVol collapses (~0.0001 on this corpus), sigma goes tiny and
+ * even a gap of 0.02% divides out to a large z. The result is 80-89% stated confidence on a market
+ * where spot is sitting ON the strike with nine minutes to run — which is physically a coin flip.
+ * At gap→0 the true probability is 50% whatever the arithmetic says, so this is wrong on first
+ * principles, not merely unlucky. LOSS-AUTOPSY.md named the symptom ("87% on a coin flip") and
+ * blamed sub-80 confidence; the actual cause is the near-zero gap, and the MIN_CONF gate cannot
+ * screen it because confidence is HIGHEST exactly when sigma is smallest.
+ *
+ * A vol FLOOR was tried for this before and reverted — it halved profit, because inflating sigma
+ * everywhere also destroys the legitimate high-conviction reads. This is the direct form: judge the
+ * distance, leave the maths alone.
+ *
+ * Measured over the 1806-market corpus at the live gate (research-mingap.js), 0.03%:
+ *
+ *   no floor    n=68  win 80.9%  +$416.59  |  halves: +$329.51 (94.1%) / +$87.08 (67.6%)
+ *   0.03%       n=62  win 83.9%  +$434.67  |  halves: +$329.51 (94.1%) / +$105.16 (71.4%)
+ *   0.04%       n=55  win 87.3%  +$435.84  |  halves: +$314.41 (96.7%) / +$121.43 (76.0%)
+ *
+ * The reason to believe it is the same reason MIN_MINUTES moved: it improves the WEAKER half — the
+ * Aug 7-8 rally that is the closest thing in the data to what hurt the live book — while the good
+ * half is untouched. The trades it drops are 53.8% winners: coin flips, as predicted. 0.03 rather
+ * than 0.04 because 0.04 cuts BTC from 8 entries to 2, which is closer to disabling a coin than
+ * filtering it, and the extra win rate is bought with volume the sample cannot really price.
+ *
+ * A module constant rather than a per-user setting, exactly like MIN_CONF and MAX_PRICE: this is
+ * what a signal IS, not a risk appetite. Reverting it is one line.
+ */
+const MIN_GAP_PCT = 0.03;
 const MAX_CANDLE_AGE_MS = 12 * 60 * 1000;
 /**
  * How often a pass runs. 20s until 2026-08-30.
@@ -316,6 +364,17 @@ async function decideFor(coin) {
   if (!r.side) return { skip: 'no-read', why: 'model produced no side' };
   if (!confOK(r.confidence)) {
     return { skip: 'below-conf', why: `${r.confidence}% is under the ${MIN_CONF}% floor` };
+  }
+  // Distance before conviction. A high confidence computed on a near-zero gap is an artifact of a
+  // collapsed sigma, not a read — see MIN_GAP_PCT. Checked after the confidence gate only so the
+  // skip log distinguishes "no signal" from "signal the maths should not have produced".
+  if (!gapOK(s.price, strike)) {
+    const gapPct = Math.abs((s.price - strike) / strike) * 100;
+    return {
+      skip: 'on-strike',
+      why: `spot is only ${gapPct.toFixed(3)}% from the strike (needs ${MIN_GAP_PCT}%) — ` +
+        `${r.confidence}% here is a quiet-market artifact, not an edge`
+    };
   }
 
   // ── the four indicators ──
@@ -1254,7 +1313,7 @@ module.exports = {
   reconcileFills,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
-  findActive, getSpot, getCandles, stats, gradeWin, confOK,
+  findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
-  MAX_SPOT_AGE_MS, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
+  MAX_SPOT_AGE_MS, MIN_GAP_PCT, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };

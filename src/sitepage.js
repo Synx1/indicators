@@ -113,6 +113,7 @@ tbody tr:hover{background:#15171e}
 
 <nav id=tabs>
   <button data-t=decisions aria-selected=true>Decisions<span class=count id=cdec></span></button>
+  <button data-t=coins aria-selected=false>Coins<span class=count id=ccoin></span></button>
   <button data-t=trades aria-selected=false>Trades<span class=count id=ctra></span></button>
   <button data-t=hours aria-selected=false>Hours<span class=count id=chrs></span></button>
   <button data-t=accounts aria-selected=false>Accounts<span class=count id=cacc></span></button>
@@ -127,6 +128,13 @@ tbody tr:hover{background:#15171e}
   audited rather than taken on trust.</div>
 </section>
 
+<section id=s-coins><div id=coinbody></div>
+  <div class=note><b>Which markets actually pay.</b> A four-day backtest ranked the coins
+  (BNB the workhorse, ETH negative, XRP and HYPE at 100%) — but two of those numbers flipped sign
+  when the entry gate changed, and the 100% ones were 7 and 9 trades. So this table is the real
+  scoreboard: settled trades only, as they land. Read the <b>trust</b> column before the win rate.
+  Nothing here is per-account — it is the fleet total, so it names nobody.</div>
+</section>
 <section id=s-trades><div id=trabody></div></section>
 <section id=s-hours><div id=hrsbody></div></section>
 <section id=s-accounts><div id=accbody></div></section>
@@ -155,7 +163,7 @@ $('tabs').addEventListener('click', e => {
   tab = b.dataset.t;
   [...$('tabs').querySelectorAll('button')].forEach(x =>
     x.setAttribute('aria-selected', String(x.dataset.t === tab)));
-  ['decisions','trades','hours','accounts'].forEach(t =>
+  ['decisions','coins','trades','hours','accounts'].forEach(t =>
     $('s-' + t).classList.toggle('on', t === tab));
   refresh();
 });
@@ -266,8 +274,71 @@ function renderTrades(d) {
     }).join('') + '</tbody></table>';
 }
 
-const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
-function renderHours(d) {
+// The per-coin scoreboard. Reads /api/state, which is OPEN — these are fleet aggregates naming
+// nobody, so this tab needs no token and stays visible like Decisions does.
+//
+// TRUST is rendered before the win rate on purpose. Every previous attempt to pick coins off this
+// bot's numbers was defeated by sample size: two coins showed 100% on 7-9 backtest trades and one of
+// them was a net LOSER under the previous gate. A win rate with no n beside it is the single most
+// misleading number this page could print, so the n and its verdict come first.
+const TRUST = {
+  none: ['—', 'dim', 'no settled trades yet'],
+  thin: ['thin', 'warn', 'under 10 trades — this win rate is not a measurement'],
+  fair: ['fair', '', '10-29 trades — suggestive, not settled'],
+  good: ['good', 'up', '30+ trades — enough to lean on']
+};
+function renderCoins(pub) {
+  const rows = (pub && pub.coins) || [];
+  const traded = rows.filter(c => c.n > 0);
+  $('ccoin').textContent = traded.length ? traded.length : '';
+  if (!rows.length) { $('coinbody').innerHTML = '<div class=empty>No market list yet.</div>'; return; }
+  if (!traded.length) {
+    $('coinbody').innerHTML = '<div class=empty>No settled trades yet — every coin below is armed ' +
+      'and waiting. This table fills in as positions close.</div>' + coinTable(rows);
+    return;
+  }
+  // Headline only from coins with a real sample; if none qualify, say so rather than crowning a
+  // 2-trade coin the best market on the page.
+  const solid = traded.filter(c => c.n >= 10);
+  const head = solid.length
+    ? (() => {
+        const best = solid.reduce((a, b) => b.net > a.net ? b : a);
+        const worst = solid.reduce((a, b) => b.net < a.net ? b : a);
+        return 'On a real sample so far, best is <b class=up>' + esc(best.sym) + '</b> (' +
+          signed(best.net) + ' on ' + best.n + ', ' + pct(best.hit) + ')' +
+          (worst.sym === best.sym ? '' : ', worst is <b class=down>' + esc(worst.sym) + '</b> (' +
+          signed(worst.net) + ' on ' + worst.n + ', ' + pct(worst.hit) + ')') + '.';
+      })()
+    : '<b class=warn>No coin has 10 settled trades yet</b>, so there is no best market to name — ' +
+      'the rows below are early readings, not rankings.';
+  $('coinbody').innerHTML = '<div class=note style="margin:0 0 14px">' + head + '</div>' + coinTable(rows);
+}
+function coinTable(rows) {
+  const maxAbs = Math.max(1, ...rows.map(c => Math.abs(c.net)));
+  const bar = n => { const w = (Math.abs(n) / maxAbs * 100).toFixed(1);
+    return '<span style="display:flex;height:8px;background:#171a21;border-radius:3px;overflow:hidden;justify-content:' +
+      (n < 0 ? 'flex-end' : 'flex-start') + '"><span style="display:block;height:100%;min-width:2px;border-radius:3px;width:' +
+      w + '%;background:' + (n < 0 ? 'var(--down)' : 'var(--up)') + '"></span></span>'; };
+  return '<table><thead><tr><th>coin</th><th></th><th class=num>settled</th><th class=num>W / L</th>' +
+    '<th class=num>win%</th><th class=num>net P&L</th><th class=num>per trade</th>' +
+    '<th class=num>open</th><th>trust</th><th style="width:22%">net</th></tr></thead><tbody>' +
+    rows.map(c => {
+      const t = TRUST[c.trust] || TRUST.none;
+      return '<tr><td class=sym>' + esc(c.sym) + '</td>' +
+        '<td>' + (c.on ? '' : '<span class=pill>off</span>') + '</td>' +
+        '<td class=num>' + c.n + (c.live ? '<div class="faint" style="font-size:11px">' + c.live + ' live</div>' : '') + '</td>' +
+        '<td class=num>' + (c.n ? c.wins + ' / ' + c.losses : '—') + '</td>' +
+        '<td class=num>' + (c.n ? pct(c.hit) : '—') + '</td>' +
+        '<td class="num ' + cls(c.net) + '">' + (c.n ? signed(c.net) : '—') + '</td>' +
+        '<td class="num ' + cls(c.per) + '">' + (c.n ? signed(c.per) : '—') + '</td>' +
+        '<td class=num>' + (c.open || '—') + '</td>' +
+        '<td><span class="' + (t[1] ? t[1] : 'dim') + '" title="' + esc(t[2]) + '">' + t[0] + '</span>' +
+        (c.lastAt ? '<div class=faint style="font-size:11px">' + ago(c.lastAt) + '</div>' : '') + '</td>' +
+        '<td>' + (c.n ? bar(c.net) : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';function renderHours(d) {
   if (d.locked) { $('hrsbody').innerHTML = lockedBox('Hourly P&L is account money'); return; }
   $('chrs').textContent = d.totalClosed ? d.totalClosed : '';
   const rows = (d.hours || []).filter(h => h.taken > 0);
@@ -351,6 +422,7 @@ async function refresh() {
     $('hasof').textContent = 'updated ' + new Date(s.asOf).toLocaleTimeString();
   }
   if (tab === 'decisions') { const d = await get('/api/decisions'); if (d && pub) renderDecisions(d, pub); }
+  if (tab === 'coins')     { if (pub) renderCoins(pub); }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
   if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
