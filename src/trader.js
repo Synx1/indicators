@@ -105,6 +105,19 @@ const axios = require('axios');
  */
 const MIN_CONF = 80;
 const MIN_CONFIRM = 3;
+
+/**
+ * Does the model's reading clear the floor?
+ *
+ * A named predicate rather than an inline comparison for the same reason gradeWin is one: a mutation
+ * test on 2026-08-30 changed `>= MIN_CONF` to `> MIN_CONF` — silently discarding every entry at
+ * exactly the floor, which is a real slice of the sample — and all twelve suites still passed. The
+ * finite check is belt and braces with decide.engineEvaluate's own fail-closed: NaN >= 80 is false,
+ * so a garbage reading is refused here too rather than relying on one guard.
+ */
+function confOK(confidence) {
+  return Number.isFinite(confidence) && confidence >= MIN_CONF;
+}
 const MIN_PRICE = 0.25;
 /**
  * The dearest this bot will pay. 0.80 until 2026-08-30 — see MIN_CONF above for why it moved and
@@ -301,7 +314,7 @@ async function decideFor(coin) {
   const minutesLeft = (new Date(market.close_time).getTime() - Date.now()) / 60000;
   const r = decide.engineEvaluate(s.price, strike, minutesLeft, candles);
   if (!r.side) return { skip: 'no-read', why: 'model produced no side' };
-  if (!(r.confidence >= MIN_CONF)) {
+  if (!confOK(r.confidence)) {
     return { skip: 'below-conf', why: `${r.confidence}% is under the ${MIN_CONF}% floor` };
   }
 
@@ -923,6 +936,18 @@ async function closePosition(t, p, sell, reason) {
 }
 
 /**
+ * Did this position win? The single most expensive line in the file, so it is a named function with
+ * a truth table in test/grading.test.js rather than an inline boolean nobody can test.
+ *
+ * A mutation test on 2026-08-30 INVERTED this expression and all twelve suites still passed — every
+ * win would have been booked as a loss and nothing would have said so. Only 'yes' and 'no' grade;
+ * anything else (void, empty, not settled yet) must never reach here, and the caller waits instead.
+ */
+function gradeWin(side, result) {
+  return (side === 'YES' && result === 'yes') || (side === 'NO' && result === 'no');
+}
+
+/**
  * Walk every account's open positions: cash out what has reached its target, settle what the
  * exchange has graded, and force-grade anything left far too long.
  */
@@ -987,7 +1012,7 @@ async function checkExits() {
         continue;
       }
 
-      const won = (p.side === 'YES' && result === 'yes') || (p.side === 'NO' && result === 'no');
+      const won = gradeWin(p.side, result);
       const closed = book.settle(t.rec.book, p, won);
       t.save(); t.noteRealised(closed.pnl, closed.live === true);
       log(`  ${won ? '✅' : '❌'} ${t.rec.tag || t.userId}: ${p.sym} ${p.direction} ` +
@@ -1210,7 +1235,7 @@ module.exports = {
   reconcileFills,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
-  findActive, getSpot, getCandles, stats,
+  findActive, getSpot, getCandles, stats, gradeWin, confOK,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
   MAX_SPOT_AGE_MS, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };
