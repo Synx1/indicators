@@ -519,6 +519,25 @@ function accountBlock(t, d) {
     return `${openN} positions already open, at the ${maxOpen} limit`;
   }
 
+  // Directional-concentration cap (opt-in, blank = no cap). The same-window rule above refuses two
+  // bets one direction/one window; this bounds the SLOWER concentration — a book filling up all one
+  // way across DIFFERENT windows, which is the structural short that met the 08-07 rally and bled the
+  // live DOWN book. Backtested on the 08-05→08-08 corpus: a cap of 1 lifted win rate 80.9%→83.6% but
+  // cut net ($416→$381), because the declined shorts still won 69%. So it is off by default and buys a
+  // higher hit rate + smaller drawdown at the cost of expected dollars — the user's call, not mine.
+  const rawDirCap = t.get('maxPerDir');
+  if (rawDirCap != null && rawDirCap !== '') {
+    const dirCap = Number(rawDirCap);
+    if (dirCap >= 1) {
+      const sameDir = mine.filter(p => p.side === d.side).length;
+      if (sameDir >= dirCap) {
+        const way = d.side === 'YES' ? 'UP' : 'DOWN';
+        return `${sameDir} ${way} position${sameDir === 1 ? '' : 's'} already open, at the ` +
+          `${dirCap} same-direction limit`;
+      }
+    }
+  }
+
   const shares = sharesFor(t, d);
   if (!(shares >= 1)) {
     // Auto size resolving to zero is a real answer, not a misconfiguration, so it says the

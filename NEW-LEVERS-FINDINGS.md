@@ -134,3 +134,54 @@ confirmation-late strategy. Same mechanic, opposite value.
 **Verdict: do not add take-profit. Hold-to-settlement is optimal for this entry style,
 and the competitor thread is closed — the only good idea it had (cheap entries) is already
 in the live gate.**
+
+## 2026-08-31 — "buy cheaper" and "cap the direction", tested end to end
+
+Follow-up to the question *"how does the DirectionalBot make money at 77%?"* The answer is
+payoff geometry — breakeven win rate **equals** entry price, so a 77% bot buying at 50¢ earns
++27¢/contract while the same 77% at 65¢ barely clears fees. So both levers were run on the full
+corpus with the production engine (`research-pricesweep.js`, `research-dircap.js`).
+
+### Lever A — lower MAX_PRICE (buy cheaper). Tested: makes it WORSE.
+
+| band | n | net | win% | $/trade | margin |
+|---|---|---|---|---|---|
+| **25-65¢ (live)** | 68 | **+$416.59** | **80.9%** | +$6.13 | **+22.1pp** |
+| 25-60¢ | 32 | +$168.62 | 71.9% | +$5.27 | +19.3pp |
+| 25-55¢ | 14 | +$41.11 | 57.1% | +$2.94 | +11.5pp |
+| 25-50¢ | 10 | +$18.62 | 50.0% | +$1.86 | +7.9pp |
+
+Every tighter ceiling cuts volume, win rate AND margin. The reason is the mirror of the
+take-profit result: this bot enters **late, on confirmation**, so by the time it fires the cheap
+contracts are the ones where the signal is *weak* — cheap = coin-flip. The DirectionalBot enters
+**early**, where cheap = mispriced. Same price, opposite meaning; the lever does not port. The
+current 25-65¢ band already has the best margin.
+
+### Lever B — cap concurrent same-direction positions. Tested: raises win% but cuts $.
+
+| sideCap | taken | net | win% | $/trade | skipped-that-wouldve (net / win%) |
+|---|---|---|---|---|---|
+| 1 | 55 | +$381.16 | **83.6%** | +$6.93 | +$35.43 / 69.2% |
+| 2 | 66 | +$395.67 | 80.3% | +$5.99 | +$20.92 / 100% |
+| 3 / none | 68 | +$416.59 | 80.9% | +$6.13 | — |
+
+A cap of 1 **does** raise the win rate (80.9→83.6%) — the thing the user asked for — but the
+shorts it declines still won 69% and were net **+$35**, so the cap buys a higher hit rate and a
+smaller drawdown by **forfeiting expected dollars**. And this is measured on the ONE regime
+(a rally) where capping shorts should look best; it still lost money. That is decisive against
+making it the default.
+
+### What shipped
+
+`maxPerDir` — an **opt-in, blank-by-default** per-user setting (src/settings.js) enforced in
+`trader.accountBlock` right after `maxOpen`. Blank = today's behaviour, unchanged. Set to N, it
+refuses an (N+1)th open position pointing the same way across different windows — the slow
+directional concentration the same-window rule misses. Off by default because the data says it
+costs money; exposed because the user may rationally prefer a higher hit rate and a hard stop on a
+one-sided book to maximum EV. Covered by `test/entry-guards.test.js` (per-direction, paper-exempt,
+count/direction in the message) and mutation-checked (>=/>, side filter, null guard all caught).
+
+**Bottom line for "higher success rate": it is achievable — flip `maxPerDir` to 1-2 — but it is a
+trade, not a free win. A higher win rate here is bought with lower total profit, because the bot is
+already right 81% of the time and the leak was never accuracy.**
+

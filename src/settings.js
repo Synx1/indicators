@@ -141,6 +141,20 @@ const SCHEMA = {
       'account ran out of money mid-round and orders started being refused.\n\n' +
       'Three at 80c is 2.4x one position. Raise it only if the balance can carry the arithmetic.'
   },
+  maxPerDir: {
+    group: 'risk', label: 'Max same-direction open', type: TYPE.INT, def: null, nullable: true,
+    min: 1, max: 20,
+    help: 'The most positions open at once that may point the SAME way (all UP, or all DOWN). ' +
+      'Blank = no cap, which is the default and the historical behaviour.\n\n' +
+      'This is the directional-concentration guard. The same-window rule already refuses two ' +
+      'bets in one direction settling in one window; this bounds the SLOWER version — a book ' +
+      'quietly filling up all-DOWN across different windows, which is a single leveraged bet on ' +
+      'the market falling. A backtest over the 08-05→08-08 corpus (a rally) showed a cap of 1 ' +
+      'raised the win rate 80.9%→83.6% but CUT net profit ($416→$381): the shorts it declined ' +
+      'still won 69% of the time. So this trades expected dollars for a higher hit rate and a ' +
+      'smaller drawdown when a trend runs against the book. Leave it blank unless you would ' +
+      'rather win more often than earn more, or you have watched one side bleed and want a hard stop.'
+  },
   maxOrderCost: {
     group: 'risk', label: 'Max cost per order', type: TYPE.MONEY, def: null, nullable: true,
     min: 0.05, max: 100000,

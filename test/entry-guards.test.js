@@ -85,6 +85,34 @@ allows(tenant({}, [held(true, { closeTime: CLOSE, side: 'NO' })], 24.9),
   dec({ closeTime: CLOSE, side: 'YES' }),
   'the OPPOSITE direction in the same window still hedges and is still allowed');
 
+// ── the directional-concentration cap (opt-in; blank = the historical no-cap behaviour) ──
+// This bounds the SLOWER concentration the same-window rule misses: a book filling up all one way
+// across DIFFERENT windows — the structural short that met the 08-07 rally and bled the live DOWN
+// book. A YES held in the CLOSE window and a YES candidate in the OTHER window are same-direction,
+// different-settlement, so ONLY this cap can stop them.
+const oneYesElsewhere = [held(true, { closeTime: CLOSE, side: 'YES' })];
+allows(tenant({}, oneYesElsewhere, 24.9), dec({ closeTime: OTHER, side: 'YES' }),
+  'with no maxPerDir set, a second same-direction bet across windows is allowed — the default is unchanged');
+blocks(tenant({ maxPerDir: 1 }, oneYesElsewhere, 24.9), dec({ closeTime: OTHER, side: 'YES' }),
+  /1 UP position already open, at the 1 same-direction limit/,
+  'maxPerDir=1 refuses the second UP bet even though it is a different window');
+allows(tenant({ maxPerDir: 1 }, [held(true, { closeTime: CLOSE, side: 'NO' })], 24.9),
+  dec({ closeTime: OTHER, side: 'YES' }),
+  'the cap is per-direction: one DOWN open does not block an UP entry');
+allows(tenant({ maxPerDir: 2 }, oneYesElsewhere, 24.9), dec({ closeTime: OTHER, side: 'YES' }),
+  'maxPerDir=2 still allows the second same-direction bet; it is the third that is refused');
+blocks(tenant({ maxPerDir: 2 },
+  [held(true, { closeTime: CLOSE, side: 'NO' }), held(true, { closeTime: OTHER, side: 'NO', ticker: 'KXETH-A' })], 24.9),
+  dec({ closeTime: '2026-08-28T23:15:00Z', side: 'NO', ticker: 'KXSOL-A' }),
+  /2 DOWN positions already open, at the 2 same-direction limit/,
+  'and the DOWN book is capped the same way, with the count and direction named');
+allows(tenant({ maxPerDir: '' }, oneYesElsewhere, 24.9), dec({ closeTime: OTHER, side: 'YES' }),
+  'a blank maxPerDir is no cap, exactly like leaving it unset');
+// A paper position is not live exposure, so it must not consume a live directional slot.
+allows(tenant({ maxPerDir: 1 }, [held(false, { closeTime: CLOSE, side: 'YES' })], 24.9),
+  dec({ closeTime: OTHER, side: 'YES' }),
+  'a PAPER same-direction position does not fill a live directional slot');
+
 // ── the free-cash check measures the SHARD, not the account ──
 // Kalshi holds cash per exchange shard and checks the order against the shard the market lives on.
 // $24 on shard 0 with 2c on the crypto shard is a $24 balance that cannot buy one contract, which
