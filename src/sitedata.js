@@ -51,6 +51,21 @@ function publicState() {
   // here BEFORE it shows up in the total. `open` is the tilt right now; `recent` is the last trades
   // per side, which is the timely read (all-time hit is dominated by a good early window).
   const dir = { open: { up: 0, down: 0 }, up: { n: 0, wins: 0, net: 0 }, down: { n: 0, wins: 0, net: 0 }, recent: [] };
+  // Which book a position belongs to. Written as an explicit three-way rather than
+  // `direction === 'DOWN' ? down : up`, because that form sends every UNRECOGNISED value to the UP
+  // book — so a legacy position saved before `direction` existed, or a lowercase one, would quietly
+  // move a DOWN loss into the UP column and stop the warn from ever firing. A health signal whose
+  // failure mode is "looks healthier" is worse than none. side is the fallback (it is what the
+  // exchange was told); anything classifiable by neither is excluded rather than guessed.
+  const sideOf = p => {
+    const d = String(p.direction || '').toUpperCase();
+    if (d === 'DOWN') return dir.down;
+    if (d === 'UP') return dir.up;
+    const s = String(p.side || '').toUpperCase();
+    if (s === 'NO') return dir.down;
+    if (s === 'YES') return dir.up;
+    return null;
+  };
   for (const t of all) {
     const b = t.rec.book;
     const s = book.stats(b);
@@ -58,13 +73,15 @@ function publicState() {
     open += book.openPositions(b).length;
     atRisk += book.atRisk(b);
     for (const p of book.openPositions(b)) {
-      if (p.direction === 'DOWN') dir.open.down++; else dir.open.up++;
+      const acc = sideOf(p);
+      if (acc === dir.down) dir.open.down++; else if (acc === dir.up) dir.open.up++;
     }
     for (const p of book.closedPositions(b)) {
       if (p.pnl == null) continue;                       // win by SIGN of realised P&L, as book.stats does
-      const acc = p.direction === 'DOWN' ? dir.down : dir.up;
+      const acc = sideOf(p);
+      if (!acc) continue;
       acc.n++; acc.net += p.pnl; if (p.pnl > 0) acc.wins++;
-      dir.recent.push({ down: p.direction === 'DOWN', pnl: p.pnl, t: new Date(p.exitAt || p.at || 0).getTime() });
+      dir.recent.push({ down: acc === dir.down, pnl: p.pnl, t: new Date(p.exitAt || p.at || 0).getTime() });
     }
 
     const baseline = t.get('paperResetAt');
@@ -149,9 +166,51 @@ function publicState() {
  *
  * Deliberately includes SKIPS. A list of fills tells you what happened; the skips tell you what the
  * gate is doing, which is most of what there is to understand about a bot that trades rarely.
+ *
+ * ── the privacy boundary, added 2026-08-30 ──
+ *
+ * This served activity.recent() VERBATIM on an open route, and four of the trader's six push sites
+ * interpolate `t.rec.tag || t.userId` into both the sentence and meta.who. So a settle, a fill, a
+ * cashout or an account-level skip published a Discord handle — or a raw Discord user ID — beside
+ * that person's per-trade P&L, position cost and daily stop figure, to anyone holding the URL. Two
+ * lines above, this file promises the open routes carry "no account information"; site.js says "No
+ * account, no name, no balance". Both were false. Reproduced against the real handler with no
+ * credential: HTTP 200, three of three account events fully exposed.
+ *
+ * A MARKET event — a signal, a market skip, an error — names nobody and passes through untouched;
+ * that feed is the documented point of the tab. An ACCOUNT event keeps its shape, its timing and its
+ * market facts, and loses the two things that make it personal: who, and how much money.
+ *
+ * The owner loses nothing. Redaction applies only to an UNAUTHENTICATED request, so the dashboard
+ * opened with ?key= still shows every name and every figure.
  */
-function decisions(limit = 250) {
-  return { asOf: Date.now(), events: activity.recent(limit), counts: activity.skipCounts() };
+const SAFE_META = new Set(['direction', 'price', 'pricePct', 'confidence', 'confirm', 'z', 'rsi',
+  'style', 'spot', 'strike', 'minutesLeft', 'edgePt', 'ticker', 'closeTime', 'spotAgeMs', 'live']);
+const MONEY = /[+-]?\$\s?[\d,]+(?:\.\d+)?/g;
+
+function redactEvent(e, ids) {
+  // meta.who is set by every identity-bearing push site; reason 'account' is belt and braces.
+  if (!(e.meta && e.meta.who) && e.reason !== 'account') return e;
+  let detail = String(e.detail || '');
+  // Those sites all format the sentence as `${who} — …`, so the identity is the first segment and
+  // the FIRST separator is the one that follows it, even when the reason contains another.
+  const cut = detail.indexOf(' — ');
+  if (cut > 0) detail = detail.slice(cut + 3);
+  for (const id of ids) if (id && detail.includes(id)) detail = detail.split(id).join('an account');
+  detail = detail.replace(MONEY, () => '$—');
+  const meta = {};
+  for (const k of Object.keys(e.meta || {})) if (SAFE_META.has(k)) meta[k] = e.meta[k];
+  return { ...e, detail, meta: Object.keys(meta).length ? meta : null };
+}
+
+function decisions(limit = 250, { redact = false } = {}) {
+  let events = activity.recent(limit);
+  if (redact) {
+    const ids = [];
+    for (const t of users.all()) { if (t.rec.tag) ids.push(t.rec.tag); if (t.userId) ids.push(String(t.userId)); }
+    events = events.map(e => redactEvent(e, ids));
+  }
+  return { asOf: Date.now(), events, counts: activity.skipCounts() };
 }
 
 /** Per-account rows. Names and money, so this is token-gated. */

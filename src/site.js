@@ -8,6 +8,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const page = require('./sitepage');
 const data = require('./sitedata');
 const { WEB_TOKEN, PORT } = require('./config');
@@ -17,16 +18,33 @@ function start(opts = {}) {
   const port = Number(opts.port || PORT || 3000);
   const token = (opts.token || WEB_TOKEN || '').trim();
 
+  // Constant-time compare, so the gate cannot be probed a byte at a time. Network jitter already
+  // swamps a string-compare difference, but this costs one function and removes the question.
+  const sameToken = v => {
+    if (typeof v !== 'string' || v.length !== token.length) return false;
+    const a = Buffer.from(v), b = Buffer.from(token);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
   const authed = req => {
     if (!token) return false;                 // no token configured = private stays private
     try {
       const u = new URL(req.url, 'http://x');
-      return u.searchParams.get('key') === token || req.headers['x-web-key'] === token;
+      return sameToken(u.searchParams.get('key')) || sameToken(req.headers['x-web-key']);
     } catch (_) { return false; }
   };
   const json = (res, code, obj) => {
-    res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify(obj));
+    // Serialise BEFORE the headers go out. With writeHead first, a payload that cannot be stringified
+    // — a cycle, a BigInt — threw between the header and the body and left the socket open with no
+    // response at all: one hung request per fault, and a dashboard row that silently never fills.
+    let body, status = code;
+    try {
+      body = JSON.stringify(obj);
+    } catch (e) {
+      log(`  !! site could not serialise a ${code} payload: ${e.message}`);
+      body = '{"error":"payload could not be serialised"}'; status = 500;
+    }
+    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(body);
   };
 
   const server = http.createServer((req, res) => {
@@ -35,8 +53,14 @@ function start(opts = {}) {
       if (path === '/health') return json(res, 200, { ok: true });
 
       // Open: what the BOT decided. No account, no name, no balance.
+      //
+      // /api/decisions is gate-AWARE rather than gated: the same route serves the full feed to a
+      // request carrying the token and a redacted one to everybody else. It used to serve the raw
+      // activity ring, which carried account handles, Discord user IDs and per-trade money — see
+      // sitedata.redactEvent. Gating it outright would have hidden the skip feed that is the whole
+      // point of the open tab; redacting keeps the reasoning public and the people private.
       if (path === '/api/state') return json(res, 200, data.publicState());
-      if (path === '/api/decisions') return json(res, 200, data.decisions(250));
+      if (path === '/api/decisions') return json(res, 200, data.decisions(250, { redact: !authed(req) }));
 
       // Private: anything naming a person or their money. Closed by default when no token is
       // configured, because the safe answer to "is this secret" is yes.
@@ -59,7 +83,11 @@ function start(opts = {}) {
       }
       res.writeHead(404); res.end('not found');
     } catch (e) {
-      try { json(res, 500, { error: e.message }); } catch (_) { /* socket already gone */ }
+      // A FIXED body. The exception text carries absolute data-dir paths and dependency internals,
+      // and every route here is reachable unauthenticated, so it went to the log — where it is
+      // actually useful — rather than to the caller.
+      log(`  !! site failed on ${(req && req.url) || '?'}: ${e && e.message}`);
+      try { json(res, 500, { error: 'request failed' }); } catch (_) { /* socket already gone */ }
     }
   });
 
