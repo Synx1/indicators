@@ -355,4 +355,50 @@ function hours() {
   return { asOf: Date.now(), totalClosed, hours: H };
 }
 
-module.exports = { publicState, decisions, accounts, trades, hours, NAME, WEB_TOKEN };
+/**
+ * The setup sheet: what each setting is, what it should be, and the arithmetic between them.
+ *
+ * PRIVATE, because the `current` column is one account's configuration and bankroll. The
+ * recommendations themselves are generic — src/recommend.js is pure and has no account in it — but
+ * reporting them next to what somebody actually has set is account data.
+ *
+ * The bankroll used is the one the account is TRADING: live balance when live, paper bankroll
+ * otherwise. Recommending a size against a $500 paper default while $30 of real money is armed would
+ * be worse than recommending nothing.
+ */
+function recommendations() {
+  const recommend = require('./recommend');
+  let warn = false;
+  try { warn = Boolean(publicState().direction.warn); } catch (_) { warn = false; }
+  return {
+    asOf: Date.now(),
+    accounts: users.all().map(t => {
+      const live = t.get('live') === true;
+      // A live account's bankroll is its real balance if Kalshi has reported one, falling back to the
+      // configured figure — the configured one is what the sizing actually uses when the balance is
+      // not yet read, so a recommendation computed from it is the one that matches behaviour.
+      const bankroll = live
+        ? (t.rec.balance != null ? Number(t.rec.balance) : Number(t.get('liveBankroll')) || null)
+        : Number(t.get('paperBankroll')) || null;
+      const snap = {
+        who: t.rec.tag || t.userId,
+        bankroll, live, armed: t.get('armed') === true,
+        shares: t.get('shares'), autoShares: t.get('autoShares') === true,
+        riskPerTrade: t.get('riskPerTrade'), dailyStopLoss: t.get('dailyStopLoss'),
+        maxOpen: t.get('maxOpen'), maxPerDir: t.get('maxPerDir'),
+        maxOrderCost: t.get('maxOrderCost'), slippageCents: t.get('slippageCents'),
+        fillGrace: t.get('fillGrace'), cashoutAt: t.get('cashoutAt'),
+        downWarn: warn
+      };
+      const rows = recommend.review(snap);
+      return {
+        who: snap.who, live, armed: snap.armed, bankroll,
+        mode: live ? 'live' : 'paper',
+        rows, attention: recommend.needsAttention(rows).length,
+        summary: recommend.summary(snap)
+      };
+    })
+  };
+}
+
+module.exports = { publicState, decisions, accounts, trades, hours, recommendations, NAME, WEB_TOKEN };

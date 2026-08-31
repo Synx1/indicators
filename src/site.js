@@ -76,6 +76,12 @@ function start(opts = {}) {
         if (!authed(req)) return json(res, 401, { error: 'token required' });
         return json(res, 200, data.hours());
       }
+      // Gated because it reads every account's settings and bankroll back to the caller. The
+      // recommendations themselves are generic arithmetic, but the CURRENT column is private.
+      if (path === '/api/recommend') {
+        if (!authed(req)) return json(res, 401, { error: 'token required' });
+        return json(res, 200, data.recommendations());
+      }
 
       if (path === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

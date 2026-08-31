@@ -98,7 +98,7 @@ activity.push({
 // The safe answer to "is this secret?" is yes. An unconfigured WEB_TOKEN must CLOSE the private
 // routes, not open them — the opposite of how most gates fail.
 if (NO_TOKEN_MODE) {
-  for (const path of ['/api/trades', '/api/accounts', '/api/hours']) {
+  for (const path of ['/api/trades', '/api/accounts', '/api/hours', '/api/recommend']) {
     const r = GET(path);
     eq(r.code, 401, `${path} is 401 when no WEB_TOKEN is configured`);
     ok(!r.body.includes(TAG) && !r.body.includes(UID), `${path} still names nobody`);
@@ -120,7 +120,10 @@ if (NO_TOKEN_MODE) {
 }
 
 // ── 1. private routes stay private ─────────────────────────────
-for (const path of ['/api/trades', '/api/accounts', '/api/hours']) {
+// /api/recommend is in this list because its `current` column is one account's settings and bankroll.
+// The recommendations themselves are generic arithmetic (src/recommend.js is pure and has no account
+// in it), but reporting them beside what somebody actually has set is account data.
+for (const path of ['/api/trades', '/api/accounts', '/api/hours', '/api/recommend']) {
   const r = GET(path);
   eq(r.code, 401, `${path} without a key is 401`);
   ok(!r.body.includes(TAG) && !r.body.includes(UID), `${path} 401 body names nobody`);

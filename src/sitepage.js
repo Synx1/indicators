@@ -116,6 +116,7 @@ tbody tr:hover{background:#15171e}
   <button data-t=coins aria-selected=false>Coins<span class=count id=ccoin></span></button>
   <button data-t=trades aria-selected=false>Trades<span class=count id=ctra></span></button>
   <button data-t=hours aria-selected=false>Hours<span class=count id=chrs></span></button>
+  <button data-t=setup aria-selected=false>Setup<span class=count id=cset></span></button>
   <button data-t=accounts aria-selected=false>Accounts<span class=count id=cacc></span></button>
 </nav>
 
@@ -137,6 +138,13 @@ tbody tr:hover{background:#15171e}
 </section>
 <section id=s-trades><div id=trabody></div></section>
 <section id=s-hours><div id=hrsbody></div></section>
+<section id=s-setup><div id=setbody></div>
+  <div class=note><b>What to set, and the arithmetic behind it.</b> Every row shows what you have,
+  what it should be, and why — derived from measurements, not taste. Two rows are load-bearing:
+  <b>Auto size</b>, because the default 30 contracts costs more than a small bankroll can re-bet after
+  one loss, and <b>Risk per trade</b>, because the 25% default is close to full Kelly at the win rate
+  the LIVE book is showing rather than the backtest's. Over-betting a real edge still loses.</div>
+</section>
 <section id=s-accounts><div id=accbody></div></section>
 
 <script>
@@ -163,7 +171,7 @@ $('tabs').addEventListener('click', e => {
   tab = b.dataset.t;
   [...$('tabs').querySelectorAll('button')].forEach(x =>
     x.setAttribute('aria-selected', String(x.dataset.t === tab)));
-  ['decisions','coins','trades','hours','accounts'].forEach(t =>
+  ['decisions','coins','trades','hours','setup','accounts'].forEach(t =>
     $('s-' + t).classList.toggle('on', t === tab));
   refresh();
 });
@@ -367,8 +375,62 @@ const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 P
       '<td>' + bar(h.net) + '</td></tr>').join('') + '</tbody></table>';
 }
 
-function renderAccounts(d) {
-  if (d.locked) { $('accbody').innerHTML = lockedBox('Account P&L is per-person money'); return; }
+// The setup sheet. Private, because the "now" column is one account's configuration.
+//
+// Severity drives colour, but the ✓/✗ column drives the READ: the whole point of a setup sheet is
+// that it can be scanned in one pass, so a settled row must be visibly settled rather than merely
+// un-highlighted. Rows arrive in declaration order (sizing, then risk, then exits, then execution),
+// which is the order they should be set in — NOT sorted by severity, because re-ordering on refresh
+// would make a page that reads as new information arriving every five seconds.
+const SEV = { high: ['must fix', 'down'], warn: ['should fix', 'warn'], note: ['fine', 'dim'] };
+function renderSetup(d) {
+  if (d.locked) { $('setbody').innerHTML = lockedBox('Your settings and bankroll are account data'); return; }
+  const accs = d.accounts || [];
+  const attention = accs.reduce((a, x) => a + (x.attention || 0), 0);
+  $('cset').textContent = attention ? attention : '';
+  if (!accs.length) { $('setbody').innerHTML = '<div class=empty>No accounts yet.</div>'; return; }
+  $('setbody').innerHTML = accs.map(a => {
+    const s = a.summary;
+    const head = '<div class=note style="margin:0 0 14px"><b>' + esc(a.who) + '</b> ' +
+      '<span class="pill ' + (a.live ? (a.armed ? 'live' : '') : 'paper') + '">' +
+      (a.live ? (a.armed ? 'armed' : 'live, not armed') : 'paper') + '</span> · bankroll ' +
+      (a.bankroll == null ? '<span class=warn>not set</span>' : money(a.bankroll)) + ' · ' +
+      (a.attention
+        ? '<b class=down>' + a.attention + ' setting' + (a.attention === 1 ? '' : 's') + ' to change</b>'
+        : '<b class=up>all settings look right</b>') + '</div>';
+    // What the recommendation COSTS, in dollars. A sheet of safer numbers with no visible price is
+    // how a conservative recommendation gets ignored — so the per-night arithmetic sits beside it.
+    const box = !s ? '' : (s.tooSmall
+      ? '<div class=locked style="margin:0 0 16px"><b>' + esc(s.note) + '</b></div>'
+      : '<div class=hero style="margin:0 0 18px">' + [
+          ['At recommended size', s.shares + ' contracts', '', money(s.cost) + ' per position'],
+          ['A win pays', signed(s.win), 'up', 'a loss costs ' + signed(s.loss)],
+          ['Per night, backtest', signed(s.nightly.backtest), cls(s.nightly.backtest),
+            s.tradesPerNight + ' trades at ' + pct(0.839)],
+          ['Per night, live rate', signed(s.nightly.live), cls(s.nightly.live),
+            'at the ' + pct(0.73) + ' the live book shows']
+        ].map(c => '<div class=cell><div class=k>' + c[0] + '</div><div class="v ' + c[2] + '">' +
+          c[1] + '</div><div class=s>' + esc(c[3]) + '</div></div>').join('') + '</div>' +
+        '<div class=note style="margin:-4px 0 16px">' + esc(s.note) + '</div>');
+    const table = '<table><thead><tr><th>setting</th><th>now</th><th>recommended</th>' +
+      '<th></th><th style="width:46%">why</th></tr></thead><tbody>' +
+      (a.rows || []).map(r => {
+        const sv = SEV[r.severity] || SEV.note;
+        return '<tr><td class=sym>' + esc(r.label) + '</td>' +
+          '<td class="' + (r.ok ? 'dim' : sv[1]) + '">' + esc(r.current) + '</td>' +
+          '<td><b>' + esc(r.recommended) + '</b></td>' +
+          '<td class=num>' + (r.ok
+            ? '<span class=up title="already right">✓</span>'
+            : '<span class="' + sv[1] + '" title="' + sv[0] + '">✗</span>') + '</td>' +
+          '<td class=why>' + esc(r.why) +
+          (r.note ? '<div class=faint style="font-size:11px;margin-top:3px">' + esc(r.note) + '</div>' : '') +
+          '</td></tr>';
+      }).join('') + '</tbody></table>';
+    return head + box + table + '<div style="height:26px"></div>';
+  }).join('');
+}
+
+function renderAccounts(d) {  if (d.locked) { $('accbody').innerHTML = lockedBox('Account P&L is per-person money'); return; }
   $('cacc').textContent = d.accounts.length ? d.accounts.length : '';
   if (!d.accounts.length) { $('accbody').innerHTML = '<div class=empty>No accounts yet.</div>'; return; }
   $('accbody').innerHTML =
@@ -425,6 +487,7 @@ async function refresh() {
   if (tab === 'coins')     { if (pub) renderCoins(pub); }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
   if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
+  if (tab === 'setup')     { const d = await get('/api/recommend'); if (d) renderSetup(d); }
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
 }
 
