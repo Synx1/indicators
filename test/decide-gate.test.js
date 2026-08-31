@@ -221,5 +221,26 @@ const strikeAtGap = (spot, gapPct, below = false) =>
   ok(!d.shadow, 'and is not shadowed — it failed a gate the ceiling has nothing to do with');
   QUOTE = { yes_ask_dollars: '0.55', no_ask_dollars: '0.55' };
 
+  // ── 8. both price bounds are WIRED, not just defined ─────────────
+  //
+  // A mutation sweep bypassed the too-cheap gate and every suite stayed green: the shadow assertions
+  // above only ever quote DEAR prices, so nothing exercised the floor. Same class of hole as the
+  // on-strike bypass, and the same fix — drive the real path at a price outside each bound.
+  setCandles();
+  STRIKE = strikeAtGap(SPOT, 0.1);
+  QUOTE = { yes_ask_dollars: '0.20', no_ask_dollars: '0.20' };
+  d = await pass();
+  eq(d.skip, 'too-cheap', `a 20c quote is refused by the floor (got ${JSON.stringify(d.skip)})`);
+  ok(/20c is under/.test(d.why), 'and the reason quotes both the price and the floor');
+  QUOTE = { yes_ask_dollars: '0.34', no_ask_dollars: '0.34' };
+  eq((await pass()).skip, 'too-cheap', 'a hair under the floor is still refused');
+  QUOTE = { yes_ask_dollars: '0.36', no_ask_dollars: '0.36' };
+  ok(!(await pass()).skip, 'and a hair above it is taken — the floor is live, not decorative');
+  // A cheap market is NOT shadowed: the shadow book exists to answer the CEILING question, and a 20c
+  // entry tells it nothing about whether the edge holds above 65c.
+  QUOTE = { yes_ask_dollars: '0.20', no_ask_dollars: '0.20' };
+  ok(!(await pass()).shadow, 'a too-cheap market is not shadowed — wrong question entirely');
+  QUOTE = { yes_ask_dollars: '0.55', no_ask_dollars: '0.55' };
+
   console.log(`PASS decideFor gate wiring — ${checks} checks`);
 })().catch(e => { console.error(e); process.exit(1); });

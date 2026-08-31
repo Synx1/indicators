@@ -124,7 +124,15 @@ eq(s.wins, 0, 'a pnl of exactly 0 is NOT a win');
 // must be deliberate, and this assertion is what makes it deliberate.
 eq(trader.MIN_CONF, 80, 'the confidence floor is 80');
 eq(trader.MAX_PRICE, 0.65, 'the ceiling is 65c — the band the edge was measured in');
-eq(trader.MIN_PRICE, 0.25, 'the floor is 25c');
+eq(trader.MIN_PRICE, 0.35, 'the floor is 35c — raised from 25c on 2026-08-31');
+// The floor and the ceiling are ONE decision about how much the model is allowed to disagree with the
+// market, because confidence and price measure the same thing. At the 80% floor, a 35c entry is a
+// 45-point disagreement and a 65c entry is a 15-point one. Asserting the SPAN pins that relationship,
+// which neither constant does alone.
+checks++; assert.ok(trader.MIN_CONF / 100 - trader.MIN_PRICE >= 0.40,
+  'a bought contract may imply at most a 45pp model-vs-market disagreement at the confidence floor');
+checks++; assert.ok(trader.MIN_CONF / 100 - trader.MAX_PRICE >= 0.10,
+  'and at least a 10pp one at the ceiling, or the gate would be buying at fair value');
 eq(trader.MIN_CONFIRM, 3, 'three of the four indicators must agree');
 eq(trader.MIN_MINUTES, 8, 'no entry inside eight minutes');
 eq(trader.MAX_MINUTES, 14, 'and none earlier than fourteen');

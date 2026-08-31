@@ -131,7 +131,30 @@ function gapOK(spot, strike) {
   if (!Number.isFinite(spot) || !Number.isFinite(strike) || strike === 0) return false;
   return Math.abs((spot - strike) / strike) * 100 >= MIN_GAP_PCT;
 }
-const MIN_PRICE = 0.25;
+/**
+ * The cheapest this bot will pay, raised from 0.25 on 2026-08-31.
+ *
+ * This is a test of a hypothesis rather than a tuned dial. Confidence and price are the SAME quantity
+ * here — both are P(closes past the strike) — so a 25¢ contract the model calls 85% is a SIXTY-point
+ * disagreement with the market. Either that is the richest edge in the book or it is where the model is
+ * most wrong, and until now nobody had looked.
+ *
+ * It is where the model is wrong. research-config-sweep.js over the 1806-market corpus:
+ *
+ *   >= 25c   n=62  win 83.9%  +$434.67  |  halves 96.8% +$326.50 / 71.0% +$108.17
+ *   >= 35c   n=61  win 85.2%  +$439.53  |  halves 96.7% +$315.89 / 74.2% +$123.64
+ *   >= 45c   n=58  win 86.2%  +$416.47  |  halves 96.6% +$295.69 / 75.9% +$120.78
+ *   >= 50c   n=55  win 87.3%  +$400.06  |  halves 96.3% +$271.81 / 78.6% +$128.25
+ *
+ * 0.35 costs exactly ONE trade and improves every other number, including the weaker (rally) half —
+ * which is the test MIN_MINUTES and MIN_GAP_PCT also had to pass, and the reason this ships where the
+ * price-CEILING changes did not. 35c and 40c are identical (nothing trades between them) and the trend
+ * continues monotonically to 50c, so it is a plateau rather than a spike.
+ *
+ * Not pushed further than 0.35 because beyond it the gain stops being free: 50c buys 3.4pp of win rate
+ * with $35 of net and seven trades, which is a judgement call rather than a correction.
+ */
+const MIN_PRICE = 0.35;
 /**
  * The dearest this bot will pay. 0.80 until 2026-08-30 — see MIN_CONF above for why it moved and
  * why the two had to move together. src/panel.js and src/advice.js carry this figure for their

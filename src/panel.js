@@ -94,7 +94,10 @@ function scannerLine() {
  *
  * Returns null when there is nothing to say: no key, no balance read, or the size fits.
  */
-const BAND_LO = 0.25;
+// Kept in step with src/trader.js MIN_PRICE, which is the source of truth. Raised 0.25 -> 0.35 on
+// 2026-08-31: a 25c contract the model calls 85% is a 60-point disagreement with the market, and
+// the corpus says that is where the model is wrong rather than where the edge is.
+const BAND_LO = 0.35;
 // Kept in step with src/trader.js MAX_PRICE, which is the source of truth for the entry band.
 const BAND_HI = 0.65;
 /**
