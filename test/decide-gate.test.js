@@ -191,5 +191,35 @@ const strikeAtGap = (spot, gapPct, below = false) =>
   eq(d.skip, 'stale-spot', 'a 90s-old spot is refused before the gap is even considered');
   STALE_MS = 0;
 
+  // ── 7. a too-dear market is offered to the shadow book ──────────
+  //
+  // The shadow book can only answer the ceiling question if decideFor actually hands it the markets
+  // that were refused for price ALONE. Asserted here rather than in shadow.test.js because that suite
+  // tests the book and this one tests the wiring — and the wiring is the half that silently does
+  // nothing if the `shadow` field is dropped from the skip.
+  setCandles();
+  STRIKE = strikeAtGap(SPOT, 0.1);
+  QUOTE = { yes_ask_dollars: '0.72', no_ask_dollars: '0.72' };
+  d = await pass();
+  eq(d.skip, 'too-dear', 'a 72c quote is refused on price');
+  ok(d.shadow, 'and is offered to the shadow book, because it cleared every other gate');
+  eq(d.shadow.price, 0.72, 'at the price it was actually refused at');
+  eq(d.shadow.side, 'NO', 'carrying the side, which grading needs');
+  ok(d.shadow.confidence >= trader.MIN_CONF, 'and the confidence that cleared the floor');
+  ok(d.shadow.ticker && d.shadow.closeTime, 'plus what a later settle pass needs to look it up');
+  // Above SHADOW_MAX there is nothing to learn — the question is the next slice up, not a lottery.
+  QUOTE = { yes_ask_dollars: '0.95', no_ask_dollars: '0.95' };
+  d = await pass();
+  eq(d.skip, 'too-dear', 'a 95c quote is still refused');
+  eq(d.shadow, null, 'but is NOT shadowed — above SHADOW_MAX the sample would not inform the ceiling');
+  // A market refused for a reason OTHER than price must not enter the sample: it is not part of the
+  // population the ceiling question is about.
+  QUOTE = { yes_ask_dollars: '0.72', no_ask_dollars: '0.72' };
+  STRIKE = strikeAtGap(SPOT, 0.02);
+  d = await pass();
+  eq(d.skip, 'on-strike', 'a near-strike market is refused on the gap, before price is considered');
+  ok(!d.shadow, 'and is not shadowed — it failed a gate the ceiling has nothing to do with');
+  QUOTE = { yes_ask_dollars: '0.55', no_ask_dollars: '0.55' };
+
   console.log(`PASS decideFor gate wiring — ${checks} checks`);
 })().catch(e => { console.error(e); process.exit(1); });

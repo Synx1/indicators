@@ -244,11 +244,55 @@ signal IS, not a risk appetite), with skip reason `on-strike`. Reverting is one 
 dashboard renders it as a **Coins** tab. Aggregate across accounts, so it names nobody and stays on
 the open route.
 
-The load-bearing column is **trust** — `thin` under 10 settled, `fair` under 30, `good` at 30+ — and
-it renders before the win rate on purpose. Every previous attempt to pick coins off this bot's
-numbers was defeated by sample size: the two coins showing 100% in the backtest had 7 and 9 trades,
-and one of them was a net LOSER under the previous gate. The headline refuses to name a best market
-until some coin has 10 settled trades. That is the answer to "what are the best markets": not the
-backtest's ranking, but this table as real trades land.
+## 2026-08-31 (late) — the apply-order change, tested and REJECTED
+
+`runOnce()` applies decisions with `for (const res of decided)` — i.e. in `gl.COINS` array order — so
+when a guard binds, BTC beats HYPE for the last free slot because B precedes H. Nothing about the
+market is consulted. That looked like a free win: given fixed slots, filling them with the
+highest-edge candidates should be strictly better.
+
+**It is not.** `research-rankorder.js` enforces the real guards (one per ticker, no same-direction
+same-window, maxOpen) and varies only the ordering:
+
+| order | taken | win% | net | margin | Sharpe |
+|---|---|---|---|---|---|
+| scan order (now) | 52 | 84.6% | +$379.70 | 26.0pp | 0.701 |
+| by edge | 52 | 84.6% | +$385.06 | 26.3pp | 0.707 |
+| **worst-first (floor)** | 52 | 84.6% | +$379.70 | 26.0pp | 0.701 |
+
+**+$5.36, or 1.4% — and the adversarial worst-first ordering ties scan order exactly.** The gate is
+so selective that slots are almost never contested: 10 refusals out of 62 candidates, and maxOpen 3,
+2 and 1 all produce nearly identical books. The defect is real and immaterial.
+
+Worse, at a loose gate where ordering *does* bite (80¢, maxOpen 1), ranking by edge is the WRONG
+rule — worst-first beats it, +$519 vs +$422, at a higher win rate (83.4% vs 80.8%):
+
+`edge = confidence − price`, so ranking by highest edge selects the candidates where the model most
+disagrees with the market. Those are exactly where the model is most likely wrong. **The model's own
+edge is an anti-signal at the top end.** Not shipped.
+
+## 2026-08-31 (late) — what DID ship: the shadow book
+
+Every argument tonight reduced to one unresolved number (83.9% backtest vs ~73% live), and the
+sub-question that mattered most — *does the edge hold at dearer entries?* — had **zero** out-of-sample
+evidence, because `MAX_PRICE` means the live book cannot contain a single entry above 65¢. So the
+ceiling could only ever be argued from a backtest and a haircut assumption. That is precisely how the
+vol floor and the stop-loss got shipped and reverted.
+
+`src/shadow.js` closes it. When a market clears **every** gate and is refused on price alone (65–80¢),
+the would-be entry is recorded and graded at settlement through the trader's own `gradeWin`. After a
+few days there is a real, out-of-sample win rate per price band, measured on live market data, at zero
+risk — surfaced on the Setup tab above the settings it informs.
+
+It cannot touch money: no account, no book, no balance in the file. Persisted to `DATA_DIR` (the answer
+takes days), bounded at 4000 rows, idempotent per ticker — a pass runs every `POLL_MS` and a market
+stays too-dear for minutes, so without that the win rate would measure how long each market lingered
+rather than whether the signal was right.
+
+`enough` is gated at 20 settled trades per band. Under that, no verdict is claimed.
+
+**This is the move because it changes the class of every future decision.** The ceiling question stops
+being my haircut assumption and becomes a measurement. Same for anything else worth shadowing later.
+
 
 

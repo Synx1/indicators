@@ -141,6 +141,12 @@ function publicState() {
     down: { ...byDir(dir.down), recentHit: rDown.hit, recentN: rDown.n },
     warn: rDown.hit != null && rDown.n >= 8 && rDown.hit < 0.65
   };
+  // What the bot WOULD have earned above its own price ceiling. Read defensively: the shadow module is
+  // only initialised by index.js, so a harness that loads sitedata alone must get a null rather than a
+  // throw — the dashboard must never be the reason a pass fails.
+  let shadow = null;
+  try { shadow = require('./shadow').report(); } catch (_) { shadow = null; }
+
   // Every tradeable coin appears, including ones with no closed trades yet, so an absent row means
   // "not traded" rather than "not shown". `trust` is deliberately conservative: a hit rate on fewer
   // than 10 settled trades is not a measurement, and saying so on the page is the whole point —
@@ -189,7 +195,11 @@ function publicState() {
     instance: INSTANCE,
     skips: activity.skipCounts(),
     direction,
-    coins: coinRows
+    coins: coinRows,
+    // The shadow book is OPEN data: it is a measurement of the SIGNAL at prices the bot refuses, with
+    // no account, no balance and no person in it. Served here rather than behind the token because it
+    // answers a question about the strategy, not about anybody's money.
+    shadow
   };
 }
 

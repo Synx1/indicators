@@ -39,6 +39,7 @@ const kt = require('./kalshitrade');
 const auth = require('./kalshiauth');
 const notify = require('./notify');
 const activity = require('./activity');
+const shadow = require('./shadow');
 const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
 
 const axios = require('axios');
@@ -413,7 +414,22 @@ async function decideFor(coin) {
   const price = r.side === 'YES' ? yesAsk : noAsk;
   if (!(price > 0)) return { skip: 'no-quote', why: 'nothing offered on our side' };
   if (price < MIN_PRICE) return { skip: 'too-cheap', why: `${Math.round(price * 100)}c is under ${MIN_PRICE * 100}c` };
-  if (price > MAX_PRICE) return { skip: 'too-dear', why: `${Math.round(price * 100)}c is over ${MAX_PRICE * 100}c` };
+  if (price > MAX_PRICE) {
+    // The one skip worth recording rather than only counting. This market cleared EVERY other gate —
+    // confidence, the gap floor, three of four indicators, the clock — and was refused solely on price.
+    // That makes it the exact population the ceiling question is about, and the live book can never
+    // contain it. Recorded to the shadow book and graded at settlement, so "does the edge hold at
+    // dearer entries" becomes a measurement instead of an argument. Cannot touch money: shadow.js has
+    // no account, no book and no balance in it.
+    return {
+      skip: 'too-dear',
+      why: `${Math.round(price * 100)}c is over ${MAX_PRICE * 100}c`,
+      shadow: price <= shadow.SHADOW_MAX ? {
+        ticker: quoted.ticker, sym: coin.sym, side: r.side, price,
+        confidence: r.confidence, confirm, closeTime: quoted.close_time || market.close_time
+      } : null
+    };
+  }
 
   // "Bought the dip" versus "chased a move": whether spot sits against or with the recent mean.
   // Recorded per fill so the two styles are measurable after the fact rather than only named.
@@ -1235,6 +1251,14 @@ async function runOnce() {
 
     if (d.skip) {
       noteSkip(d.skip);
+      // A too-dear market that cleared every other gate is the sample the ceiling question needs, so
+      // it is recorded before the skip is logged. record() is idempotent per ticker: a pass runs every
+      // POLL_MS and the same market stays too-dear for minutes, so without that the shadow win rate
+      // would be weighted by how long each market sat in the band rather than by signals.
+      if (d.shadow) {
+        try { shadow.record(d.shadow); }
+        catch (e) { log(`  !! shadow record failed for ${coin.sym}: ${e.message}`); }
+      }
       activity.push({ sym: coin.sym, kind: 'SKIP', reason: d.skip, detail: d.why });
       continue;
     }
@@ -1285,9 +1309,56 @@ async function runOnce() {
     });
   }
 
+  // Grade the shadow book LAST, after the money work, because it is diagnostic and must never delay
+  // an exit or an entry. Wrapped whole: a shadow fault is worth a log line and nothing else.
+  try { await settleShadows(); }
+  catch (e) { log(`  !! shadow settle pass failed: ${e.message}`); }
+
   // Stamped at the END, so the panel's Scanner line means "a pass finished" rather than "a pass
   // started" — a loop that wedges mid-pass must show as stale, not as healthy.
   stats.lastPass = new Date().toISOString();
+}
+
+/**
+ * Grade shadow rows whose market has settled.
+ *
+ * Bounded per pass (SHADOW_SETTLE_PER_PASS) because each row costs a market fetch, and the shadow book
+ * accumulates faster than the real one — an unbounded sweep would turn a diagnostic into the reason the
+ * data feed rate-limits the trading loop. Rows persist, so anything not reached is graded next pass.
+ *
+ * Only markets whose close time has actually passed are looked up; asking Kalshi for the result of a
+ * round still in progress is a request that can only return nothing.
+ *
+ * Grading goes through gradeWin — the SAME truth table the real book settles on — so a shadow win and
+ * a real win can never come to mean different things.
+ */
+const SHADOW_SETTLE_PER_PASS = 8;
+async function settleShadows() {
+  const now = Date.now();
+  const due = shadow.pending(40).filter(e => {
+    const t = e.closeTime ? new Date(e.closeTime).getTime() : NaN;
+    return Number.isFinite(t) && t < now;
+  }).slice(0, SHADOW_SETTLE_PER_PASS);
+  if (!due.length) return;
+  for (const row of due) {
+    let result = null;
+    try { result = await resultFor({ ticker: row.ticker, sym: row.sym }); }
+    catch (_) { continue; }                       // unresolved is normal; try again next pass
+    if (!result) continue;
+    const graded = shadow.settle(row.ticker, result, gradeWin);
+    if (graded) {
+      // A market SKIP, so it carries no account and no money — it is a fact about the signal.
+      activity.push({
+        sym: row.sym, kind: 'SETTLE', reason: 'shadow',
+        detail: `shadow ${row.band}: ${row.side === 'YES' ? 'UP' : 'DOWN'} @${row.pricePct}¢ ` +
+          `would have ${graded.won ? 'WON' : 'LOST'}`,
+        meta: {
+          shadow: true, band: row.band, pricePct: row.pricePct,
+          confidence: row.confidence, confirm: row.confirm, won: graded.won
+        }
+      });
+    }
+  }
 }
 
 function start(opts = {}) {
@@ -1313,7 +1384,7 @@ module.exports = {
   reconcileFills,
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
-  findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK,
+  findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
   MAX_SPOT_AGE_MS, MIN_GAP_PCT, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };

@@ -383,13 +383,54 @@ const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 P
 // which is the order they should be set in — NOT sorted by severity, because re-ordering on refresh
 // would make a page that reads as new information arriving every five seconds.
 const SEV = { high: ['must fix', 'down'], warn: ['should fix', 'warn'], note: ['fine', 'dim'] };
-function renderSetup(d) {
+// The shadow book, rendered above the settings it informs.
+//
+// This is the answer to "should the ceiling go up", and it is the only out-of-sample evidence that
+// exists on the question: the live book contains nothing above 65c by construction, so a backtest and
+// an assumption were the only things available before this. The "enough" flag gates the verdict on
+// purpose: under 20 settled trades a band's win rate is not a measurement, and reading one as though
+// it were is the mistake that has cost this bot the most.
+function shadowBlock(pub) {
+  const sh = pub && pub.shadow;
+  if (!sh || !sh.bands || !sh.bands.length) return '';
+  if (!sh.total) {
+    return '<div class=note style="margin:0 0 18px"><b>Shadow book: nothing recorded yet.</b> ' +
+      'Every round that clears the whole gate but is refused for price alone gets logged here and ' +
+      'graded at settlement, so the question "does the edge hold above ' + pct(sh.liveCeiling) +
+      '?" becomes a measurement instead of an argument. It risks nothing.</div>';
+  }
+  const rows = sh.bands.map(b => {
+    const verdict = !b.enough
+      ? '<span class=faint>needs ' + (sh.minSample - b.n) + ' more</span>'
+      : b.margin > 0.05 ? '<b class=up>edge holds</b>'
+        : b.margin > 0 ? '<span class=warn>thin</span>'
+          : '<b class=down>would have lost</b>';
+    return '<tr><td class=sym>' + esc(b.band) + '</td>' +
+      '<td class=num>' + b.n + (b.pending ? '<div class="faint" style="font-size:11px">' + b.pending + ' open</div>' : '') + '</td>' +
+      '<td class=num>' + (b.n ? b.wins + ' / ' + b.losses : '—') + '</td>' +
+      '<td class=num>' + (b.hit == null ? '—' : pct(b.hit)) + '</td>' +
+      '<td class=num>' + (b.avgEntry == null ? '—' : pct(b.avgEntry)) + '</td>' +
+      '<td class="num ' + cls(b.margin) + '">' + (b.margin == null ? '—' : (b.margin * 100).toFixed(1) + 'pp') + '</td>' +
+      '<td>' + verdict + '</td></tr>';
+  }).join('');
+  return '<div class=note style="margin:0 0 12px"><b>Shadow book — what the bot would have earned ' +
+    'above its own ' + pct(sh.liveCeiling) + ' ceiling.</b> ' + sh.settled + ' settled, ' + sh.pending +
+    ' still open. These trades were never taken and risked nothing; they are the only out-of-sample ' +
+    'read on whether raising the ceiling is worth it. <b>margin</b> is win% minus average entry — on a ' +
+    'binary that IS the edge per contract, because breakeven equals the price you paid.</div>' +
+    '<table style="margin-bottom:22px"><thead><tr><th>band</th><th class=num>settled</th>' +
+    '<th class=num>W / L</th><th class=num>win%</th><th class=num>avg entry</th>' +
+    '<th class=num>margin</th><th>verdict</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+function renderSetup(d, pub) {
   if (d.locked) { $('setbody').innerHTML = lockedBox('Your settings and bankroll are account data'); return; }
   const accs = d.accounts || [];
   const attention = accs.reduce((a, x) => a + (x.attention || 0), 0);
   $('cset').textContent = attention ? attention : '';
-  if (!accs.length) { $('setbody').innerHTML = '<div class=empty>No accounts yet.</div>'; return; }
-  $('setbody').innerHTML = accs.map(a => {
+  const shadowHtml = shadowBlock(pub);
+  if (!accs.length) { $('setbody').innerHTML = shadowHtml + '<div class=empty>No accounts yet.</div>'; return; }
+  $('setbody').innerHTML = shadowHtml + accs.map(a => {
     const s = a.summary;
     const head = '<div class=note style="margin:0 0 14px"><b>' + esc(a.who) + '</b> ' +
       '<span class="pill ' + (a.live ? (a.armed ? 'live' : '') : 'paper') + '">' +
@@ -487,7 +528,7 @@ async function refresh() {
   if (tab === 'coins')     { if (pub) renderCoins(pub); }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
   if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
-  if (tab === 'setup')     { const d = await get('/api/recommend'); if (d) renderSetup(d); }
+  if (tab === 'setup')     { const d = await get('/api/recommend'); if (d) renderSetup(d, pub); }
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
 }
 
