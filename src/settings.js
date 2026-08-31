@@ -141,6 +141,43 @@ const SCHEMA = {
       'account ran out of money mid-round and orders started being refused.\n\n' +
       'Three at 80c is 2.4x one position. Raise it only if the balance can carry the arithmetic.'
   },
+  kellySizing: {
+    group: 'sizing', label: 'Kelly sizing', type: TYPE.BOOL, def: false,
+    help: 'Size each trade in proportion to its EDGE instead of using one flat share of the balance. ' +
+      'Requires **Auto size** to be on; ignored otherwise.\n\n' +
+      'Flat sizing bets the same fraction on a 25-point edge and a 2-point edge. Kelly bets more on ' +
+      'the first, which is the whole point: the optimal stake for a contract costing `q` with win ' +
+      'probability `p` is `(p−q)/(1−q)` of bankroll, and this takes a fraction of that.\n\n' +
+      'Reconstructed from the BETSSSSS $100→$457 overnight challenge and backtested here over 1806 ' +
+      'markets. On $30 at the live gate it returned **3.1x** (2.6x once 2¢ of slippage is charged) ' +
+      'with a $11 peak drawdown, against roughly 1.8x for flat sizing — on the SAME 54 trades. It is ' +
+      'the one part of that challenge that survives contact with a real fee and fill model.\n\n' +
+      'It is also more conservative per trade than a flat 9%: **Max per trade** caps it at 7%.'
+  },
+  kellyFraction: {
+    group: 'sizing', label: 'Kelly fraction', type: TYPE.PCT, def: 0.12, min: 0.01, max: 1,
+    help: 'What share of the full Kelly stake to actually bet. Only read when **Kelly sizing** is on.\n\n' +
+      'Full Kelly maximises long-run growth but only if `p` is exactly right, and it produces ' +
+      'drawdowns most people cannot sit through. 0.12 is the value the $100→$457 challenge used.\n\n' +
+      'Raising this raises both the growth rate and the drawdown, and it punishes a mis-estimated ' +
+      'win rate hard. The backtest and the live book disagree about that win rate, so this is the ' +
+      'wrong dial to be brave with.'
+  },
+  maxFraction: {
+    group: 'sizing', label: 'Max per trade', type: TYPE.PCT, def: 0.07, min: 0.01, max: 1,
+    help: 'Hard ceiling on any single position as a share of the balance, whatever Kelly asks for. ' +
+      'Only read when **Kelly sizing** is on.\n\n' +
+      'This is the backstop on a confidence error: if the model reports 95% on something that is ' +
+      'really a coin flip, Kelly would bet enormously and this is what stops it.'
+  },
+  maxPortfolioFraction: {
+    group: 'sizing', label: 'Max total at risk', type: TYPE.PCT, def: 0.35, min: 0.05, max: 1,
+    help: 'Hard ceiling on ALL open positions combined, as a share of equity. Only read when ' +
+      '**Kelly sizing** is on.\n\n' +
+      'Per-trade caps do not bound a book: three positions each inside the per-trade limit can still ' +
+      'put most of the account at risk in one settlement window. This is the limit that actually ' +
+      'holds when several signals fire at once.'
+  },
   maxPerDir: {
     group: 'risk', label: 'Max same-direction open', type: TYPE.INT, def: null, nullable: true,
     min: 1, max: 20,

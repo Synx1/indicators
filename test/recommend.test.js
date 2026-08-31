@@ -111,6 +111,30 @@ eq(row({ shares: 12 }, 'shares').ok, false, '12 does not');
 eq(row({ shares: 12 }, 'shares').severity, 'high', 'and over the cap is high severity');
 eq(row({ shares: 0 }, 'shares').ok, false, 'zero shares is not a valid setting either');
 
+// ── 4b. Kelly sizing, the transferable half of the $100->$457 challenge ──
+//
+// Recommended ON, because the reconstruction with a real fee model beat flat sizing on the same trades.
+// The row must also stop contradicting itself: riskPerTrade is not read while Kelly is on, and a sheet
+// that recommends both a Kelly fraction AND a flat risk share is telling the reader two things.
+r = row({}, 'kellySizing');
+eq(r.recommended, 'on', 'Kelly sizing is recommended on');
+eq(r.ok, false, 'and the default (off) does not pass');
+eq(r.severity, 'warn', 'as a warning rather than a must-fix — flat sizing is wrong, not dangerous');
+ok(/3\.1x/.test(r.why), 'the reasoning quotes the backtested multiple');
+ok(/slippage/.test(r.why), 'and the slippage-charged version, not just the clean one');
+ok(/conservative/.test(r.why), 'and states that it sizes SMALLER per trade, which is counter-intuitive');
+eq(row({ kellySizing: true }, 'kellySizing').ok, true, 'turning it on satisfies the row');
+eq(row({ kellySizing: true }, 'kellySizing').severity, 'note', 'quietly');
+// It is a mode of auto size, so the note must say so while auto size is off.
+ok(/Needs Auto size/.test(row({ autoShares: false }, 'kellySizing').note),
+  'with auto size off the row says Kelly needs it');
+eq(row({ autoShares: true }, 'kellySizing').note, null, 'and with auto size on there is no such caveat');
+// The riskPerTrade row must defer to Kelly rather than argue with it.
+ok(/Not read while Kelly sizing is on/.test(row({ kellySizing: true }, 'riskPerTrade').note),
+  'riskPerTrade says it is not read while Kelly is on, so the sheet does not contradict itself');
+ok(!/Not read while Kelly/.test(String(row({ kellySizing: false }, 'riskPerTrade').note)),
+  'and says nothing of the kind when Kelly is off');
+
 // ── 5. the daily stop, which is the only setting that ends a bad night ──
 //
 // Sized to absorb STOP_LOSSES typical losses, then floored and capped as a share of the bankroll. At
@@ -212,7 +236,8 @@ for (const over of [
   {}, { bankroll: null }, { bankroll: 0 }, { bankroll: -5 }, { bankroll: 1e9 },
   { shares: null }, { shares: 'x' }, { riskPerTrade: null }, { riskPerTrade: 0 },
   { autoShares: true }, { dailyStopLoss: '' }, { maxOrderCost: '' }, { maxPerDir: '' },
-  { slippageCents: null }, { fillGrace: null }, { cashoutAt: '' }, { maxOpen: null }
+  { slippageCents: null }, { fillGrace: null }, { cashoutAt: '' }, { maxOpen: null },
+  { kellySizing: true }, { kellySizing: true, autoShares: true }, { kellySizing: 'yes' }
 ]) {
   const rs = rowsFor(over);
   ok(rs.length >= 9, `${JSON.stringify(over)} still produces a full sheet`);

@@ -506,9 +506,70 @@ function liveOrPaperBalance(t) {
  * made 2026-08-29 a -$57 day. riskPerTrade is the dial that decides how much a bad run costs; the
  * entry gate only decides how often one happens.
  */
+/**
+ * Kelly-proportional size, reconstructed from the BETSSSSS $100→$457 challenge.
+ *
+ * On a binary costing `q` that pays 1, the Kelly-optimal stake is (p−q)/(1−q) of bankroll. Flat sizing
+ * bets the same share on a 25-point edge and a 2-point edge; this bets in proportion to the edge, which
+ * is the one part of that challenge that survived a real fee and fill model in the backtest
+ * (research-challenge-config.js: 3.1x on $30 at the live gate, 2.6x with 2¢ slippage, $11 drawdown,
+ * against roughly 1.8x flat — on the SAME 54 trades).
+ *
+ * Three limits, and they are checked TOGETHER rather than as early returns so the binding one is
+ * whichever is actually smallest:
+ *   kellyFraction         what share of full Kelly to bet (0.12 in the challenge)
+ *   maxFraction           hard per-trade ceiling, the backstop on a confidence error
+ *   maxPortfolioFraction  hard ceiling on everything open at once, measured on EQUITY
+ *
+ * The portfolio cap is the one that matters when several signals fire together: three positions each
+ * inside the per-trade limit can still put most of an account into one settlement window.
+ *
+ * Returns 0 when the bet has no edge — a non-positive edge is not a smaller bet, it is the other side,
+ * which this bot cannot take.
+ */
+function kellyShares(t, d) {
+  const bank = liveOrPaperBalance(t);
+  // Strict about TYPE, not just finiteness, and for the same reason confOK is: decideFor produces both
+  // of these as real numbers (parseFloat and Math.round), so a string arriving here means something
+  // upstream is wrong. Coercing '84' to 84 would size a real position off a value that should not
+  // exist, and hide the fault that produced it. Kelly sizes from the model's own confidence, so a
+  // confidence bug becomes a money bug — this is the one place to be pedantic.
+  const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
+  const q = num(d.price);
+  const p = num(d.confidence) / 100;
+  if (!(bank > 0) || !(q > 0) || !(q < 1) || !Number.isFinite(p)) return 0;
+  const edge = p - q;
+  if (!(edge > 0)) return 0;
+
+  // Settings come from a store that round-trips through JSON, so these are read with Number() rather
+  // than the strict check above — but a missing or nonsense one still fails CLOSED at zero contracts
+  // instead of falling back to a generous default.
+  const kFrac = Number(t.get('kellyFraction'));
+  const maxF = Number(t.get('maxFraction'));
+  const maxPortF = Number(t.get('maxPortfolioFraction'));
+  if (!(kFrac > 0) || !(maxF > 0) || !(maxPortF > 0)) return 0;
+
+  // Only the book this entry lands in counts as exposure — a paper position is not money at risk, the
+  // same scoping accountBlock() applies to its three guards.
+  const willBeLive = !paperAllowed(t);
+  const atRisk = book.openPositions(t.rec.book)
+    .filter(x => Boolean(x.live) === willBeLive)
+    .reduce((a, x) => a + (Number(x.cost) || 0), 0);
+  const equity = bank + atRisk;
+  const room = Math.max(0, equity * maxPortF - atRisk);
+
+  const kelly = edge / (1 - q);
+  const perTrade = Math.min(kelly * kFrac, maxF) * bank;
+  return Math.max(0, Math.floor(Math.min(perTrade, room) / q));
+}
+
 function sharesFor(t, d) {
   const fixed = Math.floor(Number(t.get('shares')) || 0);
   if (!t.get('autoShares')) return fixed;
+
+  // Kelly is an auto-size MODE, not a separate switch: it needs a balance to be a fraction of, and
+  // gating it behind autoShares keeps "how big" one decision with one owner.
+  if (t.get('kellySizing') === true) return kellyShares(t, d);
 
   const bank = liveOrPaperBalance(t);
   const risk = Number(t.get('riskPerTrade'));
@@ -1385,6 +1446,7 @@ module.exports = {
   start, stop, runOnce, decideFor, applyTo, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
+  sharesFor, kellyShares,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
   MAX_SPOT_AGE_MS, MIN_GAP_PCT, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };
