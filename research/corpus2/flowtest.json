@@ -1,0 +1,61 @@
+{
+  "rows": 14741,
+  "silentShare": 0.09621026894865525,
+  "ask": {
+    "auc": 0.8429754079406071,
+    "brier": 0.16050197773703398,
+    "skill": 0.349695659378638
+  },
+  "askFlow": {
+    "auc": 0.8415313328540354,
+    "brier": 0.161276023631847,
+    "skill": 0.34655946496948387
+  },
+  "askBook": {
+    "auc": 0.8423172277994677,
+    "brier": 0.1607716695169645,
+    "skill": 0.3486029517522804
+  },
+  "askFlowBookIndicators": {
+    "auc": 0.8395020295457045,
+    "brier": 0.16264437489541778,
+    "skill": 0.3410153291355148
+  },
+  "askFlowLinear": {
+    "auc": 0.8438039366403304,
+    "brier": 0.16034829137325354,
+    "skill": 0.35031834896084657
+  },
+  "brierGainFromFlow": -0.0007740458948130302,
+  "brierGainFromBook": -0.0002696917799305254,
+  "importanceB": [
+    {
+      "feature": "logitAsk",
+      "share": 0.6335
+    },
+    {
+      "feature": "flowSizeLog",
+      "share": 0.0925
+    },
+    {
+      "feature": "netFlowCum",
+      "share": 0.0765
+    },
+    {
+      "feature": "netFlowLast",
+      "share": 0.0694
+    },
+    {
+      "feature": "netFlowRate",
+      "share": 0.0658
+    },
+    {
+      "feature": "flowTrades",
+      "share": 0.0569
+    },
+    {
+      "feature": "flowCapped",
+      "share": 0.0053
+    }
+  ]
+}

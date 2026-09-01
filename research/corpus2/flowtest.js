@@ -29,6 +29,24 @@ const DAY = 86400000;
 const REFIT = 7;
 const logit = p => { const q = Math.min(Math.max(p, 1e-6), 1 - 1e-6); return Math.log(q / (1 - q)); };
 const FLOW_NAMES = ['netFlowCum', 'netFlowRate', 'flowSizeLog', 'flowTrades', 'netFlowLast', 'flowCapped'];
+// Book microstructure, from the bars already fetched. Distinct from the price LEVEL, which is the thing
+// everything else has proved redundant to: a widening spread says the market is less sure, and a moving
+// ask says it is repricing. Cheap to add and it completes the "anything the level misses" question.
+const BOOK_NAMES = ['spread', 'askChange1m', 'askChange2m', 'bidChange1m'];
+
+function bookFeatures(book, minuteMs) {
+  const at = ms => book.find(b => b[0] === ms) || null;
+  const now = at(minuteMs);
+  if (!now) return [0, 0, 0, 0];
+  const back = k => at(minuteMs - k * 60000);
+  const a1 = back(1), a2 = back(2);
+  return [
+    +(now[1] - now[2]).toFixed(4),
+    a1 ? +(now[1] - a1[1]).toFixed(4) : 0,
+    a2 ? +(now[1] - a2[1]).toFixed(4) : 0,
+    a1 ? +(now[2] - a1[2]).toFixed(4) : 0
+  ];
+}
 
 /** Flow features from buckets strictly before minute `el`. Zeroes when the tape is silent, not nulls —
  *  "no aggressive trades yet" is itself a state, and dropping those rows would bias the sample. */
@@ -73,13 +91,16 @@ function main() {
   const featByKey = new Map();
   for (let i = 0; i < raw.X.length; i++) featByKey.set(`${raw.meta[i][0]}|${raw.meta[i][1]}|${raw.meta[i][2]}`, raw.X[i]);
 
+  const books = JSON.parse(fs.readFileSync(path.join(DIR, 'books.json'), 'utf8'));
   const rows = [];
   for (const r of candidates()) {
     const f = featByKey.get(`${r.sym}|${r.closeMs}|${r.el}`);
     const fl = flow[r.ticker];
     if (!f || !fl || !r.infoAskIsContemporaneous) continue;
-    // infoAsk: contemporaneous with both the features and the flow buckets.
-    rows.push({ y: r.y, ask: r.infoAsk, feats: f, flow: flowFeatures(fl, r.el), day: Math.floor(r.closeMs / DAY) });
+    const minuteMs = r.closeMs - 15 * 60000 + r.el * 60000;
+    // infoAsk: contemporaneous with the features, the flow buckets and the book features.
+    rows.push({ y: r.y, ask: r.infoAsk, feats: f, flow: flowFeatures(fl, r.el),
+      book: bookFeatures(books[r.ticker] || [], minuteMs), day: Math.floor(r.closeMs / DAY) });
   }
   rows.sort((a, b) => a.day - b.day);
   const silent = rows.filter(r => r.flow[3] === 0).length;
@@ -88,7 +109,8 @@ function main() {
 
   const A = walkForward(rows, r => [logit(r.ask)], (X, y) => gbm.train(X, y, { rounds: 200, depth: 3, lr: 0.08 }));
   const B = walkForward(rows, r => [logit(r.ask), ...r.flow], (X, y) => gbm.train(X, y, { rounds: 300, depth: 4, lr: 0.06 }));
-  const C = walkForward(rows, r => [logit(r.ask), ...r.flow, ...r.feats], (X, y) => gbm.train(X, y, { rounds: 300, depth: 4, lr: 0.06 }));
+  const M = walkForward(rows, r => [logit(r.ask), ...r.book], (X, y) => gbm.train(X, y, { rounds: 250, depth: 3, lr: 0.07 }));
+  const C = walkForward(rows, r => [logit(r.ask), ...r.flow, ...r.book, ...r.feats], (X, y) => gbm.train(X, y, { rounds: 300, depth: 4, lr: 0.06 }));
   const Blin = walkForward(rows, r => [logit(r.ask), ...r.flow], (X, y) => logistic(X, y, { l2: 2.0 }));
 
   const base = A.pairs.reduce((s, r) => s + r.y, 0) / A.pairs.length;
@@ -101,7 +123,8 @@ function main() {
   console.log(`out-of-sample rows: ${A.pairs.length}\n`);
   const rA = show('A: ask', A.pairs);
   const rB = show('B: ask + flow', B.pairs);
-  const rC = show('C: ask + flow + indicators', C.pairs);
+  const rM = show('M: ask + book microstructure', M.pairs);
+  const rC = show('C: ask + flow + book + indicators', C.pairs);
   const rBl = show('B linear (ask + flow)', Blin.pairs);
 
   const gainFlow = rA.brier - rB.brier;
@@ -110,14 +133,19 @@ function main() {
     ? 'ORDER FLOW ADDS INFORMATION THE PRICE LACKS — this is the first thing that has. Worth pricing.'
     : 'Order flow adds nothing beyond the price either.'}`);
 
+  const gainBook = rA.brier - rM.brier;
+  console.log(`  Brier gain from BOOK microstructure (spread, ask drift): ${gainBook >= 0 ? '+' : ''}${gainBook.toFixed(6)}`);
   console.log('\n  what B splits on:');
   for (const f of B.model.importance(['logitAsk', ...FLOW_NAMES])) console.log(`    ${f.feature.padEnd(13)} ${(f.share * 100).toFixed(1)}%`);
+  console.log('\n  what M splits on:');
+  for (const f of M.model.importance(['logitAsk', ...BOOK_NAMES])) console.log(`    ${f.feature.padEnd(13)} ${(f.share * 100).toFixed(1)}%`);
   console.log('\n  calibration of B:');
   for (const b of reliability(B.pairs)) console.log(`    ${b.band.padEnd(9)} n=${String(b.n).padStart(5)}  said ${(b.said * 100).toFixed(1)}%  happened ${(b.happened * 100).toFixed(1)}%`);
 
   fs.writeFileSync(path.join(DIR, 'flowtest.json'), JSON.stringify({
     rows: A.pairs.length, silentShare: silent / rows.length,
-    ask: rA, askFlow: rB, askFlowIndicators: rC, askFlowLinear: rBl, brierGainFromFlow: gainFlow,
+    ask: rA, askFlow: rB, askBook: rM, askFlowBookIndicators: rC, askFlowLinear: rBl,
+    brierGainFromFlow: gainFlow, brierGainFromBook: gainBook,
     importanceB: B.model.importance(['logitAsk', ...FLOW_NAMES])
   }, null, 2));
   console.log('\n-> flowtest.json');

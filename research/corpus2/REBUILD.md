@@ -321,3 +321,70 @@ inside one Kalshi round. Promising until you look at the volume:
 
 A market with no volume has no price, only a quote nobody took. There is no second book to compare
 against, so the cross-market idea is closed — not disproven, absent.
+
+## 9. Order flow: the one idea that was not price-derived, and it adds nothing either
+
+Every feature up to here is a function of the candles, and the ask is the market's own summary of those
+candles — so their redundancy was almost predictable in hindsight. **`taker_side` is different in kind:**
+it says who crossed the spread to get filled, which no chart contains, it is the classic short-horizon
+microstructure signal in every other market, and Kalshi publishes it historically, so unlike order-book
+depth it can be backtested rather than only forward-tested.
+
+Fetched the entry-window tape for 2,849 markets: **100% had aggressive flow**, mean 6.7 of 8 minutes
+covered, 750 (26%) hit the 1000-trade cap and are flagged so the model can tell a partial read from a
+complete one. Added spread and one- and two-minute ask/bid drift from the book bars at the same time.
+
+14,741 out-of-sample rows:
+
+| | AUC | Brier | Gain over the ask |
+|---|---:|---:|---:|
+| **A: ask** | 0.8430 | **0.160502** | — |
+| B: ask + flow | 0.8415 | 0.161276 | **−0.000774** |
+| M: ask + book microstructure | 0.8423 | 0.160772 | **−0.000270** |
+| C: ask + flow + book + indicators | 0.8395 | 0.162644 | −0.002142 |
+
+Nothing. The trees spend **63.3%** of their splits on the ask in B and **85.3%** in M, and every addition
+makes the forecast worse. A crude unconditional check agrees: entry-window net flow direction matched the
+outcome in **1,265 of 2,593** markets — **48.8%**, which is not a signal pointing the other way, it is no
+signal.
+
+---
+
+# Verdict after two rounds
+
+**Six independent tests, each capable of finding an edge on its own, all negative:**
+
+| Test | Result |
+|---|---:|
+| 12 features on top of `z`, linear | +0.0009 AUC |
+| 12 features on top of `z`, trees | +0.0030 AUC |
+| Indicators on top of the ask, linear | **−0.0029 Brier** |
+| Indicators on top of the ask, trees | **−0.0018 Brier** |
+| Order flow on top of the ask | **−0.0008 Brier** |
+| Book microstructure on top of the ask | **−0.0003 Brier** |
+
+Plus: Polymarket has no liquid short-horizon crypto market to compare against, and every decision rule
+priced on real asks with real fees loses — the live rule at **−4.6% ROI** over 270 trades, EV rules at
+−6.2% to −13.3%.
+
+And two corrections to my own earlier numbers, both of which made things look better than they were:
+
+- The head-to-head had been giving the book a **60-second head start**. Its edge is +0.015 AUC, not the
+  +0.043 I first reported. It still wins.
+- Pricing at the decision instant produced a **−26.5% ROI** that was entirely an artifact of deriving a
+  NO ask from an absent bid.
+
+The model is not the problem and never was. At its own 80% gate it is right **91.9%** of the time; those
+markets are priced 90–98¢ where break-even is 90–98%. The trades it is right about are unaffordable, and
+the affordable ones are where the book disagrees — and the book is better there, by a margin that
+survived a stronger model class, a fair-timing correction and a genuinely new data source.
+
+## The one hypothesis still standing
+
+**Kalshi order-book depth.** Not the tape (tested, nothing) but resting size on each side. Depth is
+exposed live and no history is published, so it cannot be backtested — only logged forward and graded in
+a few weeks. It is the last idea with a stated mechanism, and it is a small collector rather than a
+model.
+
+Everything reachable from public candles, the trade tape, the book bars and a second prediction market has
+now been measured. None of it beats the price.
