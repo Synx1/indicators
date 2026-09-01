@@ -136,9 +136,12 @@ async function missedFill(t, d, { limitCents, nowCents = null }) {
     value: [
       `wanted **${cents(d.price)}**   ·   limit **${limitCents}¢**` +
         (nowCents != null ? `   ·   now **${nowCents}¢**` : ''),
+      (nowCents != null && nowCents > limitCents
+        ? `➡️ price jumped to **${nowCents}¢** — **${nowCents - limitCents}¢ past** your ${limitCents}¢ limit, so no one sold to you.`
+        : ''),
       'A larger **Slippage allowance** catches more of these — every cent chased comes off the ' +
       'edge, so it is a trade rather than a free fix.'
-    ].join('\n'),
+    ].filter(Boolean).join('\n'),
     inline: false
   });
   return send(t.userId, { embeds: [e] });

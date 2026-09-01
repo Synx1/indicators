@@ -846,41 +846,109 @@ function reconcileFills(fills, orderId, forSide) {
   };
 }
 
-async function applyTo(t, d) {
+// ── in-pass correlation guard ───────────────────────────────────
+//
+// accountBlock() enforces one-position-per-round and one-direction-per-window by reading the BOOK.
+// But an entry is no longer recorded the instant it is placed: to overlap the fill-grace waits (see
+// runOnce), an order is PLACED in one phase and RECONCILED into the book in a later one. Between
+// those two phases the position is not in the book yet, so two coins signalling the same direction
+// in the same settlement window inside ONE pass would both clear accountBlock and double-bet — the
+// failure that took $100 to $35.62 on 2026-08-26. So placement records a lightweight CLAIM per
+// account, and every later placement in the same pass checks it. Only the two correctness-critical
+// guards live here — same ticker, and same side+window; the position cap stays a book-level
+// backstop, since being one over it for a single pass is a lesser fault than a correlated double.
+function claimBlock(claims, accountId, d) {
+  const cl = claims.get(accountId);
+  if (!cl || !cl.length) return null;
+  if (cl.some(c => c.ticker === d.market.ticker)) {
+    return 'an order is already going in on this round this pass';
+  }
+  if (cl.some(c => c.side === d.side && c.closeTime === d.market.close_time)) {
+    return `already ${d.direction} in the ${new Date(d.market.close_time).toISOString().slice(11, 16)} ` +
+      'window this pass — same direction, same settlement, so it would be one bet twice';
+  }
+  return null;
+}
+function addClaim(claims, accountId, d) {
+  const cl = claims.get(accountId) || [];
+  cl.push({ ticker: d.market.ticker, side: d.side, closeTime: d.market.close_time });
+  claims.set(accountId, cl);
+}
+/**
+ * Phase one of an entry: guard, size, and PLACE the order — but do NOT wait for the fill.
+ *
+ * Split out of applyTo so runOnce can place every account's order and then wait on all the
+ * fill-grace windows AT ONCE rather than paying each one end to end. A grace served serially across
+ * coins aged the quote of every coin behind it, which is itself a cause of the misses this reduces.
+ *
+ * Returns a terminal result ({taken:false, why}) for a block or a rejection, or {pending} for
+ * settleEntry to finish. A CLAIM is recorded the moment an order is committed — see claimBlock.
+ */
+async function placeEntry(t, d, claims) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
+  const cwhy = claimBlock(claims, t.userId, d);
+  if (cwhy) return { taken: false, why: cwhy };
 
   // The SAME sizer the guard used, or auto size would decide whether a trade is allowed while the
   // fixed number decided how big it is — the two disagreeing is a money bug.
   const shares = sharesFor(t, d);
   const liveWanted = t.get('live');
   const block = liveWanted ? t.liveBlock() : null;
+  const slip = Number(t.get('slippageCents')) || 0;
+  const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
 
-  // Paper whenever live is off, or live is on but something blocks it. A blocked live account
-  // still gets the paper record, so the decision is not lost from its history — the reason it
-  // did not trade for real is in the log, not a gap in the book.
+  // Paper whenever live is off, or live is on but something blocks it. A blocked live account still
+  // gets the paper record, so the decision is not lost from its history.
   if (!liveWanted || block) {
-    // Armed and blocked: skip it. See paperAllowed(). The reason travels with the skip so the
-    // decisions feed still explains what happened — a daily stop that stops trading silently is
-    // indistinguishable from a bot that has died.
     if (!paperAllowed(t)) return { taken: false, why: block || 'armed — paper is off' };
+    addClaim(claims, t.userId, d);
+    return { pending: { kind: 'paper', shares, limitCents, block } };
+  }
 
-    // ── the same execution a live order would have had ──
-    //
-    // Waits the user's own fill grace, re-reads the book, and fills only if somebody is still
-    // offering inside the limit. Paper that always fills at the quote is a paper book that flatters,
-    // and the whole point of running paper is to learn what live would have done.
-    const slip = Number(t.get('slippageCents')) || 0;
-    const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
+  // ── real money ── place now, reconcile later.
+  const client = kt.forUser(auth.forUser(t.userId));
+  const res = await client.placeOrder({
+    ticker: d.market.ticker, side: d.side, action: 'buy',
+    count: shares, limitCents, ioc: true
+  });
+  if (!res.ok) {
+    // A rejection repeats on every signal until something changes, and with paper off while armed
+    // nothing is being recorded meanwhile — so it is stored on the account, DM'd once, surfaced.
+    t.rec.lastReject = { why: res.why, sym: d.sym, at: new Date().toISOString(), status: res.status || null };
+    t.save();
+    if (rejectIsNew(t.userId, res.why)) await notify.orderRejected(t, d, res.why);
+    return { taken: false, why: `order rejected: ${res.why}` };
+  }
+  addClaim(claims, t.userId, d);
+  return { pending: { kind: 'live', shares, limitCents, res } };
+}
+
+/**
+ * Phase two: wait the grace, read what actually filled, and record it — or report the miss.
+ *
+ * Handed everything phase one committed to. Every one of these runs concurrently in runOnce, so the
+ * grace waits overlap instead of summing — that is the whole point of the split.
+ */
+async function settleEntry({ t, d, kind, shares, limitCents, res, block }) {
+  if (kind === 'paper') {
+    // The same execution a live order would have had: wait the order's flight time, re-read the
+    // book, and fill only if somebody is still offering inside the limit. Paper that always fills at
+    // the quote is a paper book that flatters, and the point of paper is to learn what live would do.
     await new Promise(r => setTimeout(r, ORDER_LATENCY_MS));
-    const fresh = await getMarket(d.market.ticker);
+    let fresh = await getMarket(d.market.ticker);
+    if (!fresh) { await new Promise(r => setTimeout(r, 300)); fresh = await getMarket(d.market.ticker); } // one retry so a transient hiccup doesn't blank the "now" price
     const askNow = fresh
       ? parseFloat(d.side === 'YES' ? fresh.yes_ask_dollars : fresh.no_ask_dollars) * 100
       : null;
     const sim = paperFill({ askNowCents: askNow, limitCents, quotedCents: d.pricePct });
     if (!sim.filled) {
-      await notify.missedFill(t, d, { limitCents, nowCents: askNow == null ? null : Math.round(askNow) });
-      return { taken: false, why: `paper missed the fill — ${sim.why}` };
+      // Always report the cent that blocked the fill. If the re-read failed, fall back to the ask
+      // the market showed at decision time (d.pricePct) so the alert is never blank on the one
+      // number the user is watching.
+      const nowCents = askNow != null ? Math.round(askNow) : d.pricePct;
+      await notify.missedFill(t, d, { limitCents, nowCents });
+      return { taken: false, miss: true, live: false, wanted: d.pricePct, limitCents, nowCents, why: `paper missed the fill — ${sim.why}` };
     }
     const price = +(sim.priceCents / 100).toFixed(4);
     const fee = decide.fee(price, shares);
@@ -892,31 +960,12 @@ async function applyTo(t, d) {
     await notify.entry(t, p, { live: false });
     return { taken: true, live: false, position: p, why: block || 'paper' };
   }
-
-  // ── real money ──
-  const client = kt.forUser(auth.forUser(t.userId));
-  const slip = Number(t.get('slippageCents')) || 0;
-  const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
-  const res = await client.placeOrder({
-    ticker: d.market.ticker, side: d.side, action: 'buy',
-    count: shares, limitCents, ioc: true
-  });
-  if (!res.ok) {
-    // A rejection is not a market condition. It repeats on every signal until something changes, and
-    // with paper off while armed nothing is being recorded in the meantime — so it is recorded on the
-    // account, DM'd once, and surfaced by advice.js rather than living in a log line.
-    t.rec.lastReject = { why: res.why, sym: d.sym, at: new Date().toISOString(), status: res.status || null };
-    t.save();
-    if (rejectIsNew(t.userId, res.why)) await notify.orderRejected(t, d, res.why);
-    return { taken: false, why: `order rejected: ${res.why}` };
-  }
-
-  // Wait the user's grace, then read what actually filled. Never assume the order filled at the
-  // limit: a partial at a worse average is the normal case and recording the ask as the fill is
-  // how a live book starts flattering itself.
+  // ── live ── wait the grace, then read what actually filled. Never assume it filled at the limit:
+  // a partial at a worse average is the normal case, and recording the ask as the fill is how a live
+  // book starts flattering itself.
   await new Promise(r => setTimeout(r, (Number(t.get('fillGrace')) || 3) * 1000));
   let fills = null;
-  try { fills = await client.fills({ ticker: d.market.ticker, limit: 50, forSide: d.side }); }
+  try { fills = await kt.forUser(auth.forUser(t.userId)).fills({ ticker: d.market.ticker, limit: 50, forSide: d.side }); }
   catch (e) { fills = { ok: false, why: e.message }; }
 
   const orderId = res.order && res.order.order_id;
@@ -924,10 +973,19 @@ async function applyTo(t, d) {
   const rec0 = reconcileFills(got, orderId, d.side);
   const contracts = rec0.contracts;
   if (!contracts) {
-    // Not a rejection and not a fault: the order was placed correctly and nobody sold into it.
-    // Said in those words, because the natural reading of silence here is "the bot is broken".
-    await notify.missedFill(t, d, { limitCents });
-    return { taken: false, why: `no fill at ${limitCents}c — the book moved or nothing was offered` };
+    // Placed correctly, nobody sold. Re-read the book so the miss shows WHERE the price went:
+    // "wanted 44¢, now 82¢" means no slippage would have caught it; "now 46¢" means one cent would.
+    // Public endpoint — no auth, no money — and a failed read just omits the figure.
+    let nowCents = null;
+    try {
+      const fresh = await getMarket(d.market.ticker);
+      const ask = fresh
+        ? parseFloat(d.side === 'YES' ? fresh.yes_ask_dollars : fresh.no_ask_dollars)
+        : NaN;
+      if (Number.isFinite(ask) && ask > 0) nowCents = Math.round(ask * 100);
+    } catch (_) { /* the miss is worth reporting without the now-price */ }
+    await notify.missedFill(t, d, { limitCents, nowCents });
+    return { taken: false, miss: true, live: true, wanted: d.pricePct, limitCents, nowCents, why: `no fill at ${limitCents}c — the book moved or nothing was offered` };
   }
   // The LIMIT, not the quote, when the price cannot be read: it is the worst we agreed to pay, so a
   // book that records it can only understate the edge. A quote-priced fallback flatters.
@@ -944,6 +1002,17 @@ async function applyTo(t, d) {
   });
   await notify.entry(t, p, { live: true });
   return { taken: true, live: true, position: p, partial: contracts < shares };
+}
+
+/**
+ * Apply one decision to one account end to end. The single-shot path the tests drive and the
+ * definition of correct behaviour; runOnce uses placeEntry/settleEntry directly so it can overlap
+ * the waits. A fresh claims map means this path guards purely on the book, exactly as it always did.
+ */
+async function applyTo(t, d) {
+  const r = await placeEntry(t, d, new Map());
+  if (!r.pending) return r;
+  return settleEntry({ t, d, ...r.pending });
 }
 
 // ── exits ───────────────────────────────────────────────────────
@@ -1257,8 +1326,13 @@ async function runOnce() {
   // concurrently. Applying is NOT pure — accountBlock() reads the book to enforce one position per
   // ticker, one direction per settlement window, and the position cap. If two coins both cleared
   // those guards before either recorded a position, an account would take the same bet twice in one
-  // window, which is the failure that took $100 to $35.62 on 2026-08-26. So the fan-out stops at the
-  // decision and the application stays ordered.
+  // window, which is the failure that took $100 to $35.62 on 2026-08-26.
+  //
+  // So application is two phases. PLACEMENT stays ordered per coin (accounts within a coin still
+  // fan out, bounded), and records a lightweight in-pass CLAIM the instant an order is committed so
+  // the next coin's guard sees it even though the book has not caught up — see claimBlock. SETTLING
+  // — the fill-grace wait, the reconcile, the record — is deferred and run for every placed order AT
+  // ONCE, so the waits overlap instead of summing. That is where the eight-to-ten-second pass went.
   //
   // Bounded at four rather than seven: the data reads are unauthenticated and unretried, and a burst
   // of twenty-one of them is how the 429s started.
@@ -1266,6 +1340,46 @@ async function runOnce() {
     try { return { coin, d: await decideFor(coin) }; }
     catch (e) { return { coin, err: e }; }
   });
+
+  const claims = new Map();          // per-account, in-pass: what each account already has an order in on
+  const pending = [];                // placed orders whose fill we reconcile after the loop
+
+  // Emit the log + activity for one account's result. Taken/blocked are known at placement; a fill
+  // or a miss is known only after the deferred grace wait, so both phases funnel through here.
+  const emitEntry = (coin, t, r) => {
+    const who = t.rec.tag || t.userId;
+    if (r.taken) {
+      stats.entries++;
+      log(`    ${who}: ${r.live ? 'LIVE' : 'paper'} ${r.position.contracts}× @${r.position.priceCents}c` +
+        (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''));
+      activity.push({
+        sym: coin.sym, kind: 'EXIT', reason: r.live ? 'filled-live' : 'filled-paper',
+        detail: `${who} — ${r.live ? 'LIVE' : 'paper'} ${r.position.contracts}× @${r.position.priceCents}¢, ` +
+          `cost ${users.money(r.position.cost)}` +
+          (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''),
+        meta: { who, live: r.live, seq: r.position.seq }
+      });
+      return;
+    }
+    if (r.miss) {
+      // The one the user asked to see on the site: what we wanted, what we would pay, where the book
+      // actually went. meta.who marks it an account event, so privacy.js redacts identity for the
+      // open feed; the cents are not money and survive. See notify.missedFill for the DM.
+      log(`    ${who}: MISS — ${r.why}`);
+      const past = r.nowCents != null ? r.nowCents - r.limitCents : null;
+      activity.push({
+        sym: coin.sym, kind: 'MISS', reason: 'missed-fill',
+        detail: `${who} — wanted ${r.wanted}¢, limit ${r.limitCents}¢` +
+          (r.nowCents != null
+            ? `, book moved to ${r.nowCents}¢ (${past >= 0 ? '+' : ''}${past}¢ vs limit)`
+            : ', nothing offered on our side'),
+        meta: { who, live: r.live, wanted: r.wanted, limit: r.limitCents, now: r.nowCents }
+      });
+      return;
+    }
+    log(`    ${who}: skipped — ${r.why}`);
+    activity.push({ sym: coin.sym, kind: 'SKIP', reason: 'account', detail: `${who} — ${r.why}`, meta: { who } });
+  };
 
   for (const res of decided) {
     if (!res.ok) { noteSkip('error'); stats.lastError = `pass: ${res.error && res.error.message}`; continue; }
@@ -1301,36 +1415,24 @@ async function runOnce() {
     log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
       `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ${d.style}`);
 
-    // Every account decides on the SAME decision object, concurrently but bounded. See mapLimit().
-    const results = await mapLimit(accounts, ACCOUNT_CONCURRENCY, t => applyTo(t, d));
-    results.forEach((r2, i) => {
+    // PLACE every account's order now (guarded, claim recorded); defer the fill-grace wait so the
+    // waits across coins overlap in the settle phase below instead of aging each other's quotes.
+    const placed = await mapLimit(accounts, ACCOUNT_CONCURRENCY, t => placeEntry(t, d, claims));
+    placed.forEach((r2, i) => {
       const t = accounts[i];
-      const who = t.rec.tag || t.userId;
-      if (!r2.ok) { log(`    ${who}: failed — ${r2.error.message}`); return; }
+      if (!r2.ok) { log(`    ${t.rec.tag || t.userId}: failed — ${r2.error.message}`); return; }
       const r = r2.value;
-      if (r.taken) {
-        stats.entries++;
-        log(`    ${who}: ${r.live ? 'LIVE' : 'paper'} ` +
-          `${r.position.contracts}× @${r.position.priceCents}c` +
-          (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''));
-        activity.push({
-          sym: coin.sym, kind: 'EXIT', reason: r.live ? 'filled-live' : 'filled-paper',
-          detail: `${who} — ${r.live ? 'LIVE' : 'paper'} ` +
-            `${r.position.contracts}× @${r.position.priceCents}¢, cost ` +
-            `${users.money(r.position.cost)}` +
-            (r.why && r.why !== 'paper' ? `  (live blocked: ${r.why})` : ''),
-          meta: { who, live: r.live, seq: r.position.seq }
-        });
-      } else {
-        log(`    ${who}: skipped — ${r.why}`);
-        activity.push({
-          sym: coin.sym, kind: 'SKIP', reason: 'account',
-          detail: `${who} — ${r.why}`,
-          meta: { who }
-        });
-      }
+      if (r.pending) { pending.push({ t, d, coin, ...r.pending }); return; }
+      emitEntry(coin, t, r);   // terminal already: blocked or rejected
     });
   }
+
+  // ── settle every placed order AT ONCE, so the fill-grace waits overlap instead of summing ──
+  const settled = await Promise.all(pending.map(async pk => {
+    try { return { pk, r: await settleEntry(pk) }; }
+    catch (e) { return { pk, r: { taken: false, why: `settle failed — ${e.message}` } }; }
+  }));
+  for (const { pk, r } of settled) emitEntry(pk.coin, pk.t, r);
 
   // Grade the shadow book LAST, after the money work, because it is diagnostic and must never delay
   // an exit or an entry. Wrapped whole: a shadow fault is worth a log line and nothing else.
@@ -1405,7 +1507,7 @@ module.exports = {
   activity,
   sharesFor, liveOrPaperBalance, paperAllowed, paperFill, mapLimit, shardCash, refreshBalances,
   reconcileFills,
-  start, stop, runOnce, decideFor, applyTo, accountBlock,
+  start, stop, runOnce, decideFor, applyTo, placeEntry, settleEntry, claimBlock, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
   sharesFor,
