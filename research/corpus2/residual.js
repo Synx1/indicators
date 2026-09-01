@@ -45,8 +45,10 @@ function main() {
   const data = [];
   for (const r of rows) {
     const f = featByKey.get(`${r.sym}|${r.closeMs}|${r.el}`);
-    if (!f) continue;
-    data.push({ day: Math.floor(r.closeMs / DAY), closeMs: r.closeMs, y: r.y, ask: r.yesAsk, feats: f });
+    if (!f || !r.infoAskIsContemporaneous) continue;
+    // infoAsk, not yesAsk: the fill price closes 60s after the decision and would hand the benchmark
+    // information the indicators never had, making redundancy look inevitable.
+    data.push({ day: Math.floor(r.closeMs / DAY), closeMs: r.closeMs, y: r.y, ask: r.infoAsk, feats: f });
   }
   data.sort((a, b) => a.closeMs - b.closeMs);
   const days = [...new Set(data.map(d => d.day))].sort((a, b) => a - b);

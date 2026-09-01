@@ -62,20 +62,38 @@ function candidates() {
     const book = books[ticker];
     if (!book || !book.length) continue;
     const minuteMs = closeMs - 15 * 60000 + el * 60000;
-    // The book row for THIS minute. end_period_ts is the close of the minute, so the bar covering the
-    // decision minute ends one minute later — anything else would price a decision at a later book.
-    const bar = book.find(b => b[0] === minuteMs + 60000) || book.find(b => b[0] === minuteMs);
-    if (!bar) continue;
-    const yesAsk = bar[1], yesBid = bar[2];
+    // TWO asks, because they answer different questions and conflating them flatters the book.
+    //
+    // `end_period_ts` is the END of a bar. The bar ending exactly at minuteMs closes AT the decision
+    // instant, so its price is contemporaneous with features built from candles before minuteMs — that
+    // is the only fair one for "who is better informed". The bar ending at minuteMs + 60000 closes a
+    // minute LATER; using it for the comparison would hand the book a 60-second head start the model
+    // never had. It is still the right price for ROI, because it is roughly what an order placed at the
+    // decision would actually fill against.
+    const atDecision = book.find(b => b[0] === minuteMs);
+    const afterDecision = book.find(b => b[0] === minuteMs + 60000);
+    const fill = afterDecision || atDecision;
+    if (!fill) continue;
+    const info = atDecision || afterDecision;
+    const yesAsk = fill[1], yesBid = fill[2];
     const noAsk = +(1 - yesBid).toFixed(4);
     out.push({ sym, closeMs, el, ticker, y: preds.y[i],
-      pModel: preds.pModel[i], pIncumbent: preds.pIncumbent[i], yesAsk, noAsk });
+      pModel: preds.pModel[i], pIncumbent: preds.pIncumbent[i], yesAsk, noAsk,
+      // The contemporaneous quote. Both sides are needed: a NO ask is 1 - yesBid, never 1 - yesAsk.
+      infoAsk: info[1], infoBid: info[2], infoAskIsContemporaneous: Boolean(atDecision) });
   }
   return out;
 }
 
-/** Apply a rule that returns 'YES' | 'NO' | null, taking the FIRST qualifying minute per market. */
-function applyRule(rows, rule) {
+/**
+ * Apply a rule that returns 'YES' | 'NO' | null, taking the FIRST qualifying minute per market.
+ *
+ * `priceAt` selects which ask pays. 'fill' uses the bar closing a minute after the decision — roughly
+ * what an order placed then would meet, but it carries a minute of price movement. 'decision' uses the
+ * contemporaneous ask, which is the clean read. Both are reported; a rule that only works on one of them
+ * is being carried by the timing, not by the signal.
+ */
+function applyRule(rows, rule, priceAt = 'fill') {
   const byMarket = new Map();
   for (const r of rows) {
     if (!byMarket.has(r.ticker)) byMarket.set(r.ticker, []);
@@ -87,7 +105,10 @@ function applyRule(rows, rule) {
     for (const r of list) {
       const side = rule(r);
       if (!side) continue;
-      const ask = side === 'YES' ? r.yesAsk : r.noAsk;
+      const useInfo = priceAt === 'decision' && r.infoAskIsContemporaneous;
+      const ask = side === 'YES'
+        ? (useInfo ? r.infoAsk : r.yesAsk)
+        : (useInfo ? +(1 - r.infoBid).toFixed(4) : r.noAsk);
       if (!(ask > 0.01 && ask < 0.99)) continue;
       const won = side === 'YES' ? r.y === 1 : r.y === 0;
       const fee = feeDollars(ask, SHARES);
@@ -122,12 +143,15 @@ function summarize(taken) {
  */
 function headToHead(rows) {
   const { auc, brier } = require('./evaluate');
-  // The book's implied probability of YES is its own ask, the fairest reading of what it believes.
-  const book = rows.map(r => ({ p: r.yesAsk, y: r.y }));
-  const model = rows.map(r => ({ p: r.pModel, y: r.y }));
-  const zOnly = rows.map(r => ({ p: r.pIncumbent, y: r.y }));
-  const base = rows.reduce((s, r) => s + r.y, 0) / rows.length;
-  const constant = rows.map(r => ({ p: base, y: r.y }));
+  // The CONTEMPORANEOUS ask — the bar closing at the decision instant, not the one closing a minute
+  // later. Using the later bar would let the book see 60 seconds the model did not, which is the
+  // difference between "better informed" and "informed later".
+  const fair = rows.filter(r => r.infoAskIsContemporaneous);
+  const book = fair.map(r => ({ p: r.infoAsk, y: r.y }));
+  const model = fair.map(r => ({ p: r.pModel, y: r.y }));
+  const zOnly = fair.map(r => ({ p: r.pIncumbent, y: r.y }));
+  const base = fair.reduce((s, r) => s + r.y, 0) / fair.length;
+  const constant = fair.map(r => ({ p: base, y: r.y }));
   const bC = brier(constant);
   const line = (label, pairs) => {
     const a = auc(pairs), b = brier(pairs);
@@ -135,7 +159,8 @@ function headToHead(rows) {
       `skill ${(1 - b / bC >= 0 ? '+' : '')}${(1 - b / bC).toFixed(4)}`);
     return { auc: a, brier: b, skill: 1 - b / bC };
   };
-  console.log('who is better informed, on identical rows:');
+  console.log(`who is better informed, on ${fair.length} rows with a contemporaneous ask ` +
+    `(of ${rows.length} priced; the rest have no bar closing exactly at the decision minute):`);
   const out = {
     book: line('the book (yes ask)', book),
     model: line('rebuilt model', model),
@@ -186,7 +211,7 @@ function main() {
   console.log('rule                              trades  win%     ROI      net$     margin   %DOWN   1st half         2nd half');
   const results = [];
   for (const [label, rule] of RULES) {
-    const taken = applyRule(rows, rule);
+    const taken = applyRule(rows, rule, 'fill');
     const a = summarize(taken);
     if (!a) { console.log(`${label.padEnd(33)}      0`); continue; }
     const h1 = summarize(taken.filter(t => t.closeMs < MID));
@@ -197,7 +222,32 @@ function main() {
       `${(a.margin * 100 >= 0 ? '+' : '')}${(a.margin * 100).toFixed(1).padStart(5)}pt  ${(a.down * 100).toFixed(0).padStart(4)}%   ${half(h1)} ${half(h2)}`);
     results.push({ label, ...a, firstHalf: h1, secondHalf: h2 });
   }
-  fs.writeFileSync(path.join(DIR, 'decisions.json'), JSON.stringify({ rows: rows.length, mid: MID, headToHead: h2h, results }, null, 2));
+  // ── why the rules are priced at the FILL bar and not the decision bar ──
+  //
+  // Pricing at the decision instant looks more rigorous and is not: a NO ask has to be derived as
+  // 1 - yesBid, and at the decision minute the bid side is frequently thin or absent. Measured on these
+  // rows, 22.2% of NO-side candidates derive an ask above 90c that way, and the median YES bid is 48c
+  // against a 1.5c mean spread — so those are empty book sides, not dear prices. 1 minus a bid that does
+  // not exist is not a price, and a run built on it reported -26.5% ROI purely from that artifact.
+  //
+  // The fill bar closes a minute later, by which point the bid has filled in. Its ask carries a minute of
+  // movement, which is a real if smaller objection — but the two YES asks differ by 0.27c on average, so
+  // the timing is worth cents while the empty-bid artifact is worth tens of cents. The fill bar wins.
+  const bidDiag = (() => {
+    const c = rows.filter(r => r.infoAskIsContemporaneous);
+    const noSide = c.filter(r => r.pIncumbent < 0.5);
+    return {
+      rows: c.length,
+      thinBidShare: +(c.filter(r => r.infoBid < 0.03).length / c.length).toFixed(4),
+      noAskOver90Share: noSide.length ? +(noSide.filter(r => 1 - r.infoBid > 0.90).length / noSide.length).toFixed(4) : null,
+      meanYesAskGapCents: +(c.reduce((s, r) => s + (r.infoAsk - r.yesAsk), 0) / c.length * 100).toFixed(3)
+    };
+  })();
+  console.log(`\npricing note: ${(bidDiag.noAskOver90Share * 100).toFixed(1)}% of NO-side candidates would derive an ` +
+    `ask above 90c from the decision-instant bid, which is an empty book side rather than a price. ` +
+    `Rules are therefore priced at the fill bar; the two YES asks differ by ${bidDiag.meanYesAskGapCents}c on average.`);
+  const atDecision = null;
+  fs.writeFileSync(path.join(DIR, 'decisions.json'), JSON.stringify({ rows: rows.length, mid: MID, headToHead: h2h, results, pricingNote: bidDiag }, null, 2));
   console.log('\n-> decisions.json');
 }
 

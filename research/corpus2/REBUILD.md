@@ -139,14 +139,21 @@ The success rate you asked for already exists. The next section is why it is wor
 
 **24,542 priced rows across 1,890 markets, 68 days, identical rows for every contender.**
 
+> **Corrected.** The first version of this table gave the book a 60-second head start. Kalshi's
+> `end_period_ts` is the END of a bar, so the bar I was pairing with a decision at minute *m* closed at
+> *m+1* — the book was being scored on a price the model never saw. Fixed to the bar closing **at** the
+> decision instant; the fill price still uses the later bar, because that is what an order actually pays.
+> The book's advantage shrinks from +0.043 AUC to **+0.015**, and from 0.023 Brier to **0.008**. It still
+> wins. Numbers below are the corrected ones.
+
 | | AUC | Brier | Skill vs constant |
 |---|---:|---:|---:|
-| **The book (yes ask)** | **0.8806** | **0.141626** | **+0.4320** |
-| Rebuilt model | 0.8376 | 0.164776 | +0.3391 |
-| Live engine (`z` only) | 0.8370 | 0.164859 | +0.3388 |
+| **The book (contemporaneous ask)** | **0.8528** | **0.157170** | **+0.3696** |
+| Rebuilt model | 0.8376 | 0.164790 | +0.3391 |
+| Live engine (`z` only) | 0.8370 | 0.164873 | +0.3387 |
 | Always the base rate | 0.5000 | 0.249324 | 0.0000 |
 
-The book wins on ranking **and** on calibration, by a margin that is not close. And it wins in every
+The book wins on ranking **and** on calibration — by less than it first appeared, and still clearly. And it wins in every
 price band — 1–10¢, 10–25¢, 25–40¢, 40–60¢, 60–75¢, 75–90¢, 90–99¢ — including, decisively, the one
 band the bot can afford to trade:
 
@@ -231,3 +238,86 @@ It is running a rule measured at −4.6% ROI over 270 trades whose second half i
 book is consistent with that. The honest recommendation is **paper, or the smallest size that keeps you
 interested**, until one of the two directions above produces something. Nothing in this study justifies
 real money at size.
+
+---
+
+# Round two — non-linear models, Polymarket, and order flow
+
+The first round closed on a **linear** residual test, and linearity was a real limitation: RSI should
+matter at both ends, `z` should interact with the clock, volume probably only matters when extreme. A
+linear term averages all of that into one slope and reports approximately zero — which is exactly what
+RSI's +0.0024 weight was. So the conclusion was not safe until trees had a turn.
+
+## 7. Gradient-boosted trees: same answer
+
+Wrote a histogram GBM from scratch (`gbm.js`) — 255 quantile bins, logistic loss with Newton leaves,
+early stopping on a held-out tail of each training window so tree count never touches the test fold.
+Sanity check: **99.7% on a pure XOR** that a linear model scores ~50% on, so it can genuinely see
+interaction.
+
+**Without the price** — 352,131 out-of-sample rows:
+
+| | AUC | Brier |
+|---|---:|---:|
+| Live engine (`z` only) | 0.8449 | 0.162563 |
+| **GBM on 13 features** | **0.8479** | **0.159194** |
+
+Trees beat logistic's +0.0009 with **+0.0030 AUC**, and they find some real structure — 18.9% of splits
+go to `volAccel`, 11.2% to `leftMin`, so volatility acceleration and the clock do interact with `z`. But
+the total is still three thousandths of AUC.
+
+**With the price** — the decisive test, 24,542 rows:
+
+| | AUC | Brier |
+|---|---:|---:|
+| The raw ask | 0.8733 | 0.145530 |
+| **GBM on the ask alone** | 0.8717 | **0.145184** |
+| GBM on ask + 13 indicators | 0.8691 | 0.146702 |
+| Logistic on ask + indicators | 0.8693 | 0.147141 |
+
+**Brier gain from the indicators, non-linearly, on top of the price: −0.001518.** Negative again. The
+trees spend **49.1% of their splits on the ask** and still end up worse for having the indicators.
+
+So the redundancy is not an artifact of assuming linearity. A model that provably captures interaction
+reaches the same verdict.
+
+**Rerun against a fairly-timed price** (after the lookahead fix in §4), 14,741 rows:
+
+| | AUC | Brier |
+|---|---:|---:|
+| The raw ask | 0.8446 | 0.161119 |
+| **GBM on the ask alone** | 0.8430 | **0.160502** |
+| GBM on ask + 13 indicators | 0.8401 | 0.162266 |
+
+**Brier gain from the indicators, non-linearly, on a fairly-timed price: −0.001764.** Still negative. The
+verdict survives both corrections — non-linearity and the timing fix — independently.
+
+### A pricing artifact worth recording
+
+Pricing the decision rules at the decision instant instead of the fill bar looked more rigorous and was
+not. A NO ask has to be derived as `1 − yesBid`, and at the decision minute the bid side is often thin or
+absent: **22.2% of NO-side candidates derive an ask above 90¢** that way, against a median YES bid of 48¢
+and a 1.5¢ mean spread. Those are empty book sides, not dear prices. A run built on them reported −26.5%
+ROI purely from the artifact.
+
+The fill bar closes a minute later, by which point the bid has filled in. Its ask carries a minute of
+movement — a real but smaller objection, since the two YES asks differ by **0.27¢** on average. So the
+rules in §6 are priced at the fill bar, which is also the more favourable of the two for the strategy.
+
+## 8. Polymarket: there is no second book
+
+Checked whether a second prediction market could provide a cross-market signal. Polymarket **does** run
+5-minute crypto up/down markets on BTC, ETH, SOL and XRP — `btc-updown-5m-…`, three of which would fit
+inside one Kalshi round. Promising until you look at the volume:
+
+- Those markets are dated **December 2025**, nine months stale, with **volume 0 and liquidity 0**, still
+  reported by the API as `active: true`.
+- **Zero** crypto markets ending within the next hour.
+- **Zero** crypto markets closing within 24 hours with more than $1k liquidity.
+- The only crypto market in the top-volume list is *"Will Solana reach $190 in September?"* — a 29-day
+  horizon on $1,000 of volume.
+- Scanning 100 recently settled markets: **no** 5-minute up/down markets among them. What Polymarket
+  actually trades is token-launch FDV and politics.
+
+A market with no volume has no price, only a quote nobody took. There is no second book to compare
+against, so the cross-market idea is closed — not disproven, absent.
