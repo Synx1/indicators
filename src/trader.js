@@ -108,6 +108,75 @@ const MIN_CONF = 80;
 const MIN_CONFIRM = 3;
 
 /**
+ * A direction must exist before the fully-priced entry appears.
+ *
+ * Both 2026-08-31 live losses were the same failure: a first-minute dump made RSI, EMA, Bollinger
+ * and VWAP all point DOWN at once, but those are four lagging views of one move. HYPE reversed in
+ * the next minute; SOL briefly gained 7c and then crossed the strike. Requiring a direction to have
+ * existed for one minute rejects the impulse without pretending volume is a directional oracle.
+ *
+ * The observer starts at 60%, below the 80% entry floor: it asks only "was this already the model's
+ * direction?" The CURRENT read must still clear every real gate. On the 1,806-market corpus this
+ * kept 52/61 entries, raised 85.2% -> 86.5%, raised $7.21 -> $7.80/trade, cut max drawdown $39 ->
+ * $22, and stayed positive in both halves and all seven coins.
+ */
+const SIGNAL_OBSERVE_CONF = 60;
+const SIGNAL_CONFIRM_MS = 60 * 1000;
+
+function createSignalTracker() {
+  const watches = new Map();
+  return {
+    observe(sym, observation, now = Date.now()) {
+      const key = String(sym || '');
+      const at = Number(now);
+      const valid = key && observation && observation.ticker && observation.side &&
+        Number.isFinite(Number(observation.confidence)) &&
+        Number(observation.confidence) >= SIGNAL_OBSERVE_CONF && Number.isFinite(at);
+      if (!valid) {
+        if (key) watches.delete(key);
+        return { ready: false, ageMs: 0 };
+      }
+
+      let watch = watches.get(key);
+      if (!watch || watch.ticker !== observation.ticker || watch.side !== observation.side ||
+          at < watch.lastAt) {
+        watch = { ticker: observation.ticker, side: observation.side, since: at, lastAt: at };
+        watches.set(key, watch);
+        return { ready: false, ageMs: 0, since: at };
+      }
+
+      watch.lastAt = at;
+      const ageMs = Math.max(0, at - watch.since);
+      return { ready: ageMs >= SIGNAL_CONFIRM_MS, ageMs, since: watch.since };
+    },
+    clear(sym) { watches.delete(String(sym || '')); },
+    get size() { return watches.size; }
+  };
+}
+
+const signalTracker = createSignalTracker();
+
+/** Turn a fresh qualifying impulse into a visible skip until its direction has persisted. */
+function gateSignal(coin, d, now = Date.now(), tracker = signalTracker) {
+  const seen = tracker.observe(coin && coin.sym, d && d.observation, now);
+  if (!d || d.skip) return d;
+  if (!seen.ready) {
+    const ageSec = Math.floor(seen.ageMs / 1000);
+    return {
+      ...d,
+      skip: 'signal-young',
+      why: `${d.direction} model direction is only ${ageSec}s old — waiting for ` +
+        `${SIGNAL_CONFIRM_MS / 1000}s persistence before entry`,
+      skipMeta: {
+        direction: d.direction, confidence: d.confidence, confirm: d.confirm,
+        signalAgeMs: seen.ageMs, ticker: d.market && d.market.ticker
+      }
+    };
+  }
+  return { ...d, signalAgeMs: seen.ageMs };
+}
+
+/**
  * Does the model's reading clear the floor?
  *
  * A named predicate rather than an inline comparison for the same reason gradeWin is one: a mutation
@@ -332,6 +401,44 @@ async function getCandles(product) {
   return candles;
 }
 
+/**
+ * Context that lets a settled trade be replayed instead of guessed at later.
+ *
+ * Volume uses the latest COMPLETED candle against the previous 30 completed candles. The live
+ * candle is partial, so comparing it with full minutes makes every early-in-minute entry look
+ * falsely quiet. Drift is the signed ten-minute move; positive means price rose, regardless of the
+ * side selected. These are diagnostics, not extra gates.
+ */
+function marketDiagnostics(candles, spot, strike, now = Date.now()) {
+  const completed = (candles || [])
+    .filter(c => Number.isFinite(Number(c.time)) && Number(c.time) * 1000 + 60000 <= now)
+    .sort((a, b) => Number(b.time) - Number(a.time));
+  const latest = completed[0] || null;
+  const older = completed[Math.min(10, completed.length - 1)] || null;
+  const volumeBase = completed.slice(1, 31).filter(c => Number(c.volume) >= 0);
+  const avgVolume = volumeBase.length
+    ? volumeBase.reduce((sum, c) => sum + Number(c.volume || 0), 0) / volumeBase.length
+    : null;
+  const finite = n => Number.isFinite(n) ? +n.toFixed(3) : null;
+  return {
+    gapBps: finite(strike > 0 ? ((spot - strike) / strike) * 1e4 : NaN),
+    oneMinuteBps: finite(latest && latest.close > 0 ? ((spot - latest.close) / latest.close) * 1e4 : NaN),
+    drift10Bps: finite(latest && older && older.close > 0
+      ? Math.log(latest.close / older.close) * 1e4 : NaN),
+    volumeRatio: finite(latest && avgVolume > 0 ? Number(latest.volume || 0) / avgVolume : NaN),
+    realizedVolBps: finite(completed.length >= 2 ? decide.realizedVol(completed, 10) * 1e4 : NaN)
+  };
+}
+
+function diagnosticText(d) {
+  const bits = [];
+  if (Number.isFinite(d.signalAgeMs)) bits.push(`signal ${Math.round(d.signalAgeMs / 1000)}s`);
+  if (Number.isFinite(d.gapBps)) bits.push(`gap ${d.gapBps.toFixed(1)}bp`);
+  if (Number.isFinite(d.drift10Bps)) bits.push(`drift10 ${d.drift10Bps >= 0 ? '+' : ''}${d.drift10Bps.toFixed(1)}bp`);
+  if (Number.isFinite(d.volumeRatio)) bits.push(`volume ${d.volumeRatio.toFixed(2)}x`);
+  return bits.length ? ` · ${bits.join(' · ')}` : '';
+}
+
 // ── one market, one decision ────────────────────────────────────
 
 /**
@@ -386,19 +493,23 @@ async function decideFor(coin) {
   const minutesLeft = (new Date(market.close_time).getTime() - Date.now()) / 60000;
   const r = decide.engineEvaluate(s.price, strike, minutesLeft, candles);
   if (!r.side) return { skip: 'no-read', why: 'model produced no side' };
+  const observation = r.confidence >= SIGNAL_OBSERVE_CONF
+    ? { ticker: market.ticker, side: r.side, confidence: r.confidence }
+    : null;
+  const withObservation = value => observation ? { ...value, observation } : value;
   if (!confOK(r.confidence)) {
-    return { skip: 'below-conf', why: `${r.confidence}% is under the ${MIN_CONF}% floor` };
+    return withObservation({ skip: 'below-conf', why: `${r.confidence}% is under the ${MIN_CONF}% floor` });
   }
   // Distance before conviction. A high confidence computed on a near-zero gap is an artifact of a
   // collapsed sigma, not a read — see MIN_GAP_PCT. Checked after the confidence gate only so the
   // skip log distinguishes "no signal" from "signal the maths should not have produced".
   if (!gapOK(s.price, strike)) {
     const gapPct = Math.abs((s.price - strike) / strike) * 100;
-    return {
+    return withObservation({
       skip: 'on-strike',
       why: `spot is only ${gapPct.toFixed(3)}% from the strike (needs ${MIN_GAP_PCT}%) — ` +
         `${r.confidence}% here is a quiet-market artifact, not an edge`
-    };
+    });
   }
 
   // ── the four indicators ──
@@ -420,7 +531,7 @@ async function decideFor(coin) {
     if (s.price < vwap) confirm++;
   }
   if (confirm < MIN_CONFIRM) {
-    return { skip: 'indicators', why: `only ${confirm}/4 agreed with ${r.side}` };
+    return withObservation({ skip: 'indicators', why: `only ${confirm}/4 agreed with ${r.side}` });
   }
 
   // ── price it at the LAST possible moment ──
@@ -435,8 +546,10 @@ async function decideFor(coin) {
   const yesAsk = parseFloat(quoted.yes_ask_dollars || 0);
   const noAsk = parseFloat(quoted.no_ask_dollars || 0);
   const price = r.side === 'YES' ? yesAsk : noAsk;
-  if (!(price > 0)) return { skip: 'no-quote', why: 'nothing offered on our side' };
-  if (price < MIN_PRICE) return { skip: 'too-cheap', why: `${Math.round(price * 100)}c is under ${MIN_PRICE * 100}c` };
+  if (!(price > 0)) return withObservation({ skip: 'no-quote', why: 'nothing offered on our side' });
+  if (price < MIN_PRICE) {
+    return withObservation({ skip: 'too-cheap', why: `${Math.round(price * 100)}c is under ${MIN_PRICE * 100}c` });
+  }
   if (price > MAX_PRICE) {
     // The one skip worth recording rather than only counting. This market cleared EVERY other gate —
     // confidence, the gap floor, three of four indicators, the clock — and was refused solely on price.
@@ -444,14 +557,14 @@ async function decideFor(coin) {
     // contain it. Recorded to the shadow book and graded at settlement, so "does the edge hold at
     // dearer entries" becomes a measurement instead of an argument. Cannot touch money: shadow.js has
     // no account, no book and no balance in it.
-    return {
+    return withObservation({
       skip: 'too-dear',
       why: `${Math.round(price * 100)}c is over ${MAX_PRICE * 100}c`,
       shadow: price <= shadow.SHADOW_MAX ? {
         ticker: quoted.ticker, sym: coin.sym, side: r.side, price,
         confidence: r.confidence, confirm, closeTime: quoted.close_time || market.close_time
       } : null
-    };
+    });
   }
 
   // "Bought the dip" versus "chased a move": whether spot sits against or with the recent mean.
@@ -460,9 +573,10 @@ async function decideFor(coin) {
   const style = (r.side === 'YES')
     ? (s.price < avgClose ? 'DIP' : 'MOVE')
     : (s.price > avgClose ? 'DIP' : 'MOVE');
+  const diagnostics = marketDiagnostics(candles, s.price, strike);
 
   return {
-    sym: coin.sym, market: quoted,
+    sym: coin.sym, market: quoted, observation,
     // The shard this market lives on, taken from Kalshi's own field rather than inferred. The
     // collateral check happens inside that shard's matching engine, so it is what an
     // affordability test has to be measured against.
@@ -472,7 +586,8 @@ async function decideFor(coin) {
     confidence: r.confidence, z: r.z, confirm, rsi: Math.round(rsi),
     price, pricePct: Math.round(price * 100), style,
     spot: s.price, spotAgeMs: s.ageMs, candleAgeMs: Math.round(candleAgeMs),
-    modelPct: r.confidence, edgePt: Math.round(r.confidence - price * 100)
+    modelPct: r.confidence, edgePt: Math.round(r.confidence - price * 100),
+    ...diagnostics
   };
 }
 
@@ -710,6 +825,12 @@ function record(t, d, fill) {
   p.confirm = d.confirm;
   p.z = d.z;
   p.candleAgeMs = d.candleAgeMs;
+  p.signalAgeMs = d.signalAgeMs;
+  p.gapBps = d.gapBps;
+  p.oneMinuteBps = d.oneMinuteBps;
+  p.drift10Bps = d.drift10Bps;
+  p.volumeRatio = d.volumeRatio;
+  p.realizedVolBps = d.realizedVolBps;
   t.save();
   return p;
 }
@@ -1337,8 +1458,13 @@ async function runOnce() {
   // Bounded at four rather than seven: the data reads are unauthenticated and unretried, and a burst
   // of twenty-one of them is how the 429s started.
   const decided = await mapLimit(gl.COINS, COIN_CONCURRENCY, async coin => {
-    try { return { coin, d: await decideFor(coin) }; }
-    catch (e) { return { coin, err: e }; }
+    try { return { coin, d: gateSignal(coin, await decideFor(coin)) }; }
+    catch (e) {
+      // A thrown feed/quote read produced no trustworthy observation. Do not let a watch from an
+      // earlier pass age through that blind spot and qualify as continuous persistence later.
+      signalTracker.clear(coin.sym);
+      return { coin, err: e };
+    }
   });
 
   const claims = new Map();          // per-account, in-pass: what each account already has an order in on
@@ -1396,24 +1522,32 @@ async function runOnce() {
         try { shadow.record(d.shadow); }
         catch (e) { log(`  !! shadow record failed for ${coin.sym}: ${e.message}`); }
       }
-      activity.push({ sym: coin.sym, kind: 'SKIP', reason: d.skip, detail: d.why });
+      activity.push({
+        sym: coin.sym, kind: 'SKIP', reason: d.skip, detail: d.why,
+        meta: d.skipMeta || null
+      });
       continue;
     }
     stats.decisions++;
     activity.push({
       sym: coin.sym, kind: 'TAKEN', reason: 'signal',
       detail: `${d.direction} @${d.pricePct}¢ — ${d.confidence}% confidence, ${d.confirm}/4 ` +
-        `indicators agreed, ${d.style === 'DIP' ? 'bought a dip' : 'chased a move'}`,
+        `indicators agreed, ${d.style === 'DIP' ? 'bought a dip' : 'chased a move'}` +
+        diagnosticText(d),
       meta: {
         direction: d.direction, price: d.price, pricePct: d.pricePct,
         confidence: d.confidence, confirm: d.confirm, z: d.z, rsi: d.rsi,
         style: d.style, spot: d.spot, strike: d.strike,
         spotAgeMs: d.spotAgeMs, minutesLeft: +d.minutesLeft.toFixed(2),
-        edgePt: d.edgePt, ticker: d.market.ticker, closeTime: d.market.close_time
+        edgePt: d.edgePt, ticker: d.market.ticker, closeTime: d.market.close_time,
+        signalAgeMs: d.signalAgeMs, gapBps: d.gapBps, oneMinuteBps: d.oneMinuteBps,
+        drift10Bps: d.drift10Bps, volumeRatio: d.volumeRatio,
+        realizedVolBps: d.realizedVolBps
       }
     });
     log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
-      `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ${d.style}`);
+      `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ` +
+      `${d.style}${diagnosticText(d)}`);
 
     // PLACE every account's order now (guarded, claim recorded); defer the fill-grace wait so the
     // waits across coins overlap in the settle phase below instead of aging each other's quotes.
@@ -1510,7 +1644,9 @@ module.exports = {
   start, stop, runOnce, decideFor, applyTo, placeEntry, settleEntry, claimBlock, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
+  createSignalTracker, gateSignal, marketDiagnostics, diagnosticText,
   sharesFor,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
+  SIGNAL_OBSERVE_CONF, SIGNAL_CONFIRM_MS,
   MAX_SPOT_AGE_MS, MIN_GAP_PCT, POLL_MS, ORDER_LATENCY_MS, COIN_CONCURRENCY
 };

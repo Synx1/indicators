@@ -227,7 +227,8 @@ function publicState() {
  * opened with ?key= still shows every name and every figure.
  */
 const SAFE_META = new Set(['direction', 'price', 'pricePct', 'confidence', 'confirm', 'z', 'rsi',
-  'style', 'spot', 'strike', 'minutesLeft', 'edgePt', 'ticker', 'closeTime', 'spotAgeMs', 'live']);
+  'style', 'spot', 'strike', 'minutesLeft', 'edgePt', 'ticker', 'closeTime', 'spotAgeMs', 'live',
+  'signalAgeMs', 'gapBps', 'oneMinuteBps', 'drift10Bps', 'volumeRatio', 'realizedVolBps']);
 const MONEY = /[+-]?\$\s?[\d,]+(?:\.\d+)?/g;
 
 function redactEvent(e, ids) {
@@ -310,7 +311,10 @@ function trades(limit = 300) {
         pnl: p.pnl, outcome: p.outcome,
         confidence: p.confidence, confirm: p.confirm, style: p.style,
         at: p.at, exitAt: p.exitAt, closeTime: p.closeTime,
-        spotAgeMs: p.spotAgeMs, open: false
+        ticker: p.ticker, strike: p.strike, spot: p.spot, minutesLeft: p.minutesLeft,
+        spotAgeMs: p.spotAgeMs, signalAgeMs: p.signalAgeMs,
+        gapBps: p.gapBps, oneMinuteBps: p.oneMinuteBps, drift10Bps: p.drift10Bps,
+        volumeRatio: p.volumeRatio, realizedVolBps: p.realizedVolBps, open: false
       });
     }
     for (const p of book.openPositions(t.rec.book)) {
@@ -321,7 +325,10 @@ function trades(limit = 300) {
         pnl: null, outcome: 'OPEN',
         confidence: p.confidence, confirm: p.confirm, style: p.style,
         at: p.at, exitAt: null, closeTime: p.closeTime,
-        spotAgeMs: p.spotAgeMs, open: true
+        ticker: p.ticker, strike: p.strike, spot: p.spot, minutesLeft: p.minutesLeft,
+        spotAgeMs: p.spotAgeMs, signalAgeMs: p.signalAgeMs,
+        gapBps: p.gapBps, oneMinuteBps: p.oneMinuteBps, drift10Bps: p.drift10Bps,
+        volumeRatio: p.volumeRatio, realizedVolBps: p.realizedVolBps, open: true
       });
     }
   }
