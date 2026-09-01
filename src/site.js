@@ -76,6 +76,12 @@ function start(opts = {}) {
         if (!authed(req)) return json(res, 401, { error: 'token required' });
         return json(res, 200, data.hours());
       }
+      // Gated for the same reason as /api/hours: the buckets carry realised net dollars. The gate
+      // question itself is generic, but the answer is this book's money.
+      if (path === '/api/gates') {
+        if (!authed(req)) return json(res, 401, { error: 'token required' });
+        return json(res, 200, data.gates());
+      }
       // Gated because it reads every account's settings and bankroll back to the caller. The
       // recommendations themselves are generic arithmetic, but the CURRENT column is private.
       if (path === '/api/recommend') {

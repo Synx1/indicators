@@ -116,6 +116,7 @@ tbody tr:hover{background:#15171e}
   <button data-t=coins aria-selected=false>Coins<span class=count id=ccoin></span></button>
   <button data-t=trades aria-selected=false>Trades<span class=count id=ctra></span></button>
   <button data-t=hours aria-selected=false>Hours<span class=count id=chrs></span></button>
+  <button data-t=gates aria-selected=false>Gates<span class=count id=cgat></span></button>
   <button data-t=setup aria-selected=false>Setup<span class=count id=cset></span></button>
   <button data-t=accounts aria-selected=false>Accounts<span class=count id=cacc></span></button>
 </nav>
@@ -138,6 +139,15 @@ tbody tr:hover{background:#15171e}
 </section>
 <section id=s-trades><div id=trabody></div></section>
 <section id=s-hours><div id=hrsbody></div></section>
+<section id=s-gates><div id=gatbody></div>
+  <div class=note><b>Do the gates earn their place?</b> Two assumptions are worth doubting. <b>Confirm</b>
+  assumes more indicator agreement is better — nothing measured supports that, and four-of-four may
+  simply mean the move is fully extended. <b>RSI</b> is the one lever that survived a chronological
+  split: refusing a DOWN entry whose RSI is already deeply oversold dropped 14 backtest trades that
+  went 8/14. Read <b>margin</b>, not the win rate: it is the win rate minus what the entry price
+  already demands, so 68% at 64¢ is a <i>losing</i> bucket. Anything under ~30 settled trades cannot
+  tell a gate from a run.</div>
+</section>
 <section id=s-setup><div id=setbody></div>
   <div class=note><b>What to set, and the arithmetic behind it.</b> Every row shows what you have,
   what it should be, and why — derived from measurements, not taste. Two rows are load-bearing:
@@ -347,6 +357,28 @@ function coinTable(rows) {
     }).join('') + '</tbody></table>';
 }
 
+function renderGates(d) {
+  const pct = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
+  // Margin is the number that matters and it is signed, so it gets the colour. A positive win rate
+  // with a negative margin is the exact mistake this tab exists to make visible.
+  const marg = v => v == null ? '<td class=dim>—</td>'
+    : '<td class=' + (v >= 0 ? 'win' : 'loss') + '>' + (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + 'pt</td>';
+  const row = b => '<tr><td>' + esc(b.label) + '</td><td class=' + (b.taken < 30 ? 'dim' : '') + '>' + b.taken +
+    '</td><td>' + (b.taken ? b.wins : '—') + '</td><td>' + pct(b.rate) + '</td><td class=dim>' + pct(b.needRate) +
+    '</td>' + marg(b.margin) + '<td class=' + (b.net >= 0 ? 'win' : 'loss') + '>' +
+    (b.net >= 0 ? '+' : '') + '$' + Math.abs(b.net).toFixed(2) + '</td></tr>';
+  const table = (title, rows) => '<h3>' + esc(title) + '</h3><table><thead><tr><th>bucket</th><th>taken</th>' +
+    '<th>won</th><th>rate</th><th>needs</th><th>margin</th><th>net</th></tr></thead><tbody>' +
+    rows.map(row).join('') + '</tbody></table>';
+  $('gatbody').innerHTML =
+    (d.settled ? '' : '<div class=note>No settled trades yet — nothing to judge.</div>') +
+    table('Overall', [d.overall]) +
+    table('By indicator agreement', d.byConfirm) +
+    table('By RSI stretch' + (d.withRsi < d.settled ? ' (' + (d.settled - d.withRsi) + ' older trades carry no RSI)' : ''), d.byRsi) +
+    table('By direction', d.byDirection);
+  $('cgat').textContent = d.settled || '';
+}
+
 const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';function renderHours(d) {
   if (d.locked) { $('hrsbody').innerHTML = lockedBox('Hourly P&L is account money'); return; }
   $('chrs').textContent = d.totalClosed ? d.totalClosed : '';
@@ -529,6 +561,7 @@ async function refresh() {
   if (tab === 'coins')     { if (pub) renderCoins(pub); }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
   if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
+  if (tab === 'gates')     { const d = await get('/api/gates');     if (d) renderGates(d); }
   if (tab === 'setup')     { const d = await get('/api/recommend'); if (d) renderSetup(d, pub); }
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
 }

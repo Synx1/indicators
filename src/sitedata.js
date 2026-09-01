@@ -309,7 +309,7 @@ function trades(limit = 300) {
         contracts: p.contracts, priceCents: p.priceCents, exitCents: p.exitPriceCents,
         cost: p.cost, fees: +((Number(p.entryFee) || 0) + (Number(p.exitFee) || 0)).toFixed(2),
         pnl: p.pnl, outcome: p.outcome,
-        confidence: p.confidence, confirm: p.confirm, style: p.style,
+        confidence: p.confidence, confirm: p.confirm, style: p.style, rsi: p.rsi,
         at: p.at, exitAt: p.exitAt, closeTime: p.closeTime,
         ticker: p.ticker, strike: p.strike, spot: p.spot, minutesLeft: p.minutesLeft,
         spotAgeMs: p.spotAgeMs, signalAgeMs: p.signalAgeMs,
@@ -323,7 +323,7 @@ function trades(limit = 300) {
         contracts: p.contracts, priceCents: p.priceCents, exitCents: null,
         cost: p.cost, fees: +(Number(p.entryFee) || 0).toFixed(2),
         pnl: null, outcome: 'OPEN',
-        confidence: p.confidence, confirm: p.confirm, style: p.style,
+        confidence: p.confidence, confirm: p.confirm, style: p.style, rsi: p.rsi,
         at: p.at, exitAt: null, closeTime: p.closeTime,
         ticker: p.ticker, strike: p.strike, spot: p.spot, minutesLeft: p.minutesLeft,
         spotAgeMs: p.spotAgeMs, signalAgeMs: p.signalAgeMs,
@@ -418,4 +418,78 @@ function recommendations() {
   };
 }
 
-module.exports = { publicState, decisions, accounts, trades, hours, recommendations, NAME, WEB_TOKEN };
+/**
+ * Do the gates earn their place? Splits the SETTLED book by the two assumptions worth doubting.
+ *
+ * ── why these two ──
+ *
+ * `confirm` assumes more indicator agreement is better. Nothing measured supports that: over the
+ * 1,806-market corpus 4/4 went 67.6% against 3/4's 70.0%, and on a live 16-trade afternoon the split
+ * was 3/11 for 4/4 against 5/5 for 3/4. The mechanism, if it is real, is that four-of-four agreement
+ * means the move is fully extended — maximum consensus is the exhaustion condition, not the
+ * conviction condition.
+ *
+ * `rsi` is the one lever that survived a chronological split. Refusing a DOWN entry whose RSI is
+ * already deeply oversold dropped 14 corpus trades that went 8/14 for -$5.34, and it was the only
+ * variant not negative in the weaker half.
+ *
+ * Both are published rather than acted on. Each bucket reports `taken` and the break-even rate its own
+ * average entry price demands, because a bucket that wins 100% of five trades is not a finding, and the
+ * only number that matters is the margin OVER break-even — a 68% win rate at 64c is a losing strategy.
+ */
+function gates() {
+  const rows = [];
+  for (const t of users.all()) {
+    for (const p of book.closedPositions(t.rec.book)) {
+      if (p.outcome === 'OPEN' || p.pnl == null) continue;
+      rows.push({
+        live: !!p.live, pnl: Number(p.pnl) || 0,
+        won: Number(p.pnl) > 0,
+        priceCents: Number(p.priceCents),
+        confirm: Number(p.confirm),
+        rsi: p.rsi == null ? null : Number(p.rsi),
+        direction: p.direction
+      });
+    }
+  }
+  // Break-even includes the entry fee, which is the part that makes a 63% win rate at 63c a loss.
+  const breakEven = pct => {
+    const p = pct / 100;
+    return Number.isFinite(p) && p > 0 && p < 1 ? p + 0.07 * p * (1 - p) : null;
+  };
+  const bucket = (label, list) => {
+    if (!list.length) return { label, taken: 0, wins: 0, rate: null, net: 0, avgEntryCents: null, needRate: null, margin: null };
+    const wins = list.filter(r => r.won).length;
+    const net = +list.reduce((s, r) => s + r.pnl, 0).toFixed(2);
+    const avg = list.reduce((s, r) => s + (Number.isFinite(r.priceCents) ? r.priceCents : 0), 0) / list.length;
+    const need = breakEven(avg);
+    const rate = wins / list.length;
+    return {
+      label, taken: list.length, wins, rate: +rate.toFixed(4), net,
+      avgEntryCents: +avg.toFixed(1),
+      needRate: need == null ? null : +need.toFixed(4),
+      margin: need == null ? null : +(rate - need).toFixed(4)
+    };
+  };
+
+  const settled = rows;
+  // Oversold/overbought thresholds match the tested variant exactly (35 / 65), not a rounder number.
+  const exhausted = r => r.rsi != null && (r.direction === 'DOWN' ? r.rsi < 35 : r.rsi > 65);
+  return {
+    asOf: Date.now(),
+    settled: settled.length,
+    withRsi: settled.filter(r => r.rsi != null).length,
+    overall: bucket('all settled', settled),
+    byConfirm: [3, 4].map(n => bucket(`${n}/4 agreed`, settled.filter(r => r.confirm === n))),
+    byRsi: [
+      bucket('RSI stretched (the guard would refuse)', settled.filter(exhausted)),
+      bucket('RSI not stretched', settled.filter(r => r.rsi != null && !exhausted(r)))
+    ],
+    byDirection: ['UP', 'DOWN'].map(d => bucket(d, settled.filter(r => r.direction === d))),
+    caution: 'A bucket under ~30 settled trades cannot separate a real gate from a run. Read `taken` ' +
+      'and `margin` together: margin is the win rate MINUS the rate the entry price already demands, ' +
+      'so a positive rate with a negative margin is a losing bucket.'
+  };
+}
+
+module.exports = { publicState, decisions, accounts, trades, hours, recommendations, gates, NAME, WEB_TOKEN };

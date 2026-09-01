@@ -823,6 +823,11 @@ function record(t, d, fill) {
   // 3-of-4 versus 4-of-4 are answerable from the record instead of only from a log line.
   p.style = d.style;
   p.confirm = d.confirm;
+  // RSI rides along because it is the one lever that survived the chronological split: over the corpus,
+  // refusing DOWN entries whose RSI was already deeply oversold (17-34) dropped 14 trades that went
+  // 8/14 for -$5.34, and it was the only variant not negative in the weaker half. That cannot be
+  // evaluated on the live book unless the value is recorded at entry, and it was not being recorded.
+  p.rsi = d.rsi;
   p.z = d.z;
   p.candleAgeMs = d.candleAgeMs;
   p.signalAgeMs = d.signalAgeMs;
