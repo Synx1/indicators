@@ -163,10 +163,14 @@ const SCHEMA = {
       'holds when a price or a share count is wrong.'
   },
   slippageCents: {
-    group: 'execution', label: 'Slippage allowance', type: TYPE.INT, def: 2, min: 0, max: 15,
+    group: 'execution', label: 'Slippage allowance', type: TYPE.INT, def: 4, min: 0, max: 20,
     help: 'How many cents above the quote the limit price may go, so a moving book still fills.\n\n' +
-      'Every cent chased comes off the edge. 0 means the limit sits exactly at the quote and a ' +
-      'ticking market simply misses.'
+      'This is the main dial for "fill more often": a 15-minute binary near its strike ticks a ' +
+      'few cents in the second between the quote and the order, and at 0 that tick is a clean ' +
+      'miss. 4¢ catches the near-misses; a big move ("wanted 56¢, now 82¢") still misses, and ' +
+      'should — that is chasing, not filling.\n\n' +
+      'Every cent chased comes off the edge, so it is a trade, not a free fix. Raised from a 2¢ ' +
+      'default on 2026-08-31 because misses were costing more entries than the slippage costs edge.'
   }
 };
 

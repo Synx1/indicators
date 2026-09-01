@@ -213,6 +213,7 @@ const KIND = {
   EXIT:   ['FILLED', 'pill win'],
   SETTLE: ['CLOSED', 'pill'],
   SKIP:   ['SKIPPED', 'pill'],
+  MISS:   ['MISSED', 'pill loss'],
   ERROR:  ['ERROR', 'pill loss']
 };
 
