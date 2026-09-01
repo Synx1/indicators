@@ -28,7 +28,11 @@ const position = over => ({
   assert.ok(!/·\s*85%\s*·\s*4\/4/.test(e.description), 'an unlabelled bare confidence is the thing being fixed');
   const body = e.fields[0].value;
   assert.ok(/the price says 66%/.test(body));
-  assert.ok(/optimistic/.test(body), 'the direction of the bias has to be stated, not implied');
+  // The claim must be about which forecast is better where they disagree, not about the model being
+  // "optimistic" — measured over 68 days the model is if anything cold, and the earlier wording was a
+  // 44-row artifact stated as a property of the model.
+  assert.ok(/the price is the better forecast/.test(body), 'the DM must name which number to trust');
+  assert.ok(!/optimistic/.test(body), 'the retracted 19-points-hot framing must not come back');
 
   // The book number is derived from the fill, so a different fill must move it.
   await notify.entry({ userId: 'u1' }, position({ price: 0.41 }), { live: false });

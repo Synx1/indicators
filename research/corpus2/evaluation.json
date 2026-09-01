@@ -1,0 +1,197 @@
+{
+  "rows": 386958,
+  "baseRate": 0.5029899885775717,
+  "days": 68,
+  "trainDays": 23,
+  "model": {
+    "auc": 0.8474453815356949,
+    "brier": 0.15947426089552225,
+    "skill": 0.3620801443274657
+  },
+  "incumbent": {
+    "auc": 0.8465013501285646,
+    "brier": 0.1618674882277207,
+    "skill": 0.3525068926580456
+  },
+  "constant": {
+    "brier": 0.2499910599700564
+  },
+  "reliabilityModel": [
+    {
+      "band": "0-10%",
+      "n": 48129,
+      "said": 0.0382,
+      "happened": 0.049
+    },
+    {
+      "band": "10-20%",
+      "n": 32044,
+      "said": 0.15,
+      "happened": 0.1536
+    },
+    {
+      "band": "20-30%",
+      "n": 34070,
+      "said": 0.2508,
+      "happened": 0.2446
+    },
+    {
+      "band": "30-40%",
+      "n": 37056,
+      "said": 0.3506,
+      "happened": 0.3477
+    },
+    {
+      "band": "40-50%",
+      "n": 39416,
+      "said": 0.4501,
+      "happened": 0.4391
+    },
+    {
+      "band": "50-60%",
+      "n": 38666,
+      "said": 0.5494,
+      "happened": 0.5379
+    },
+    {
+      "band": "60-70%",
+      "n": 36689,
+      "said": 0.6497,
+      "happened": 0.6434
+    },
+    {
+      "band": "70-80%",
+      "n": 34376,
+      "said": 0.7492,
+      "happened": 0.7396
+    },
+    {
+      "band": "80-90%",
+      "n": 32973,
+      "said": 0.85,
+      "happened": 0.8409
+    },
+    {
+      "band": "90-100%",
+      "n": 53539,
+      "said": 0.963,
+      "happened": 0.9578
+    }
+  ],
+  "reliabilityIncumbent": [
+    {
+      "band": "0-10%",
+      "n": 51913,
+      "said": 0.0339,
+      "happened": 0.0561
+    },
+    {
+      "band": "10-20%",
+      "n": 33486,
+      "said": 0.1511,
+      "happened": 0.1665
+    },
+    {
+      "band": "20-30%",
+      "n": 38420,
+      "said": 0.2516,
+      "happened": 0.2697
+    },
+    {
+      "band": "30-40%",
+      "n": 44970,
+      "said": 0.351,
+      "happened": 0.3778
+    },
+    {
+      "band": "40-50%",
+      "n": 46020,
+      "said": 0.4484,
+      "happened": 0.4875
+    },
+    {
+      "band": "50-60%",
+      "n": 44537,
+      "said": 0.5473,
+      "happened": 0.6134
+    },
+    {
+      "band": "60-70%",
+      "n": 35922,
+      "said": 0.6478,
+      "happened": 0.7219
+    },
+    {
+      "band": "70-80%",
+      "n": 28539,
+      "said": 0.748,
+      "happened": 0.8212
+    },
+    {
+      "band": "80-90%",
+      "n": 24062,
+      "said": 0.8491,
+      "happened": 0.8988
+    },
+    {
+      "band": "90-100%",
+      "n": 39089,
+      "said": 0.9664,
+      "happened": 0.9733
+    }
+  ],
+  "weights": [
+    {
+      "feature": "z",
+      "weight": 2.8982
+    },
+    {
+      "feature": "gapBps",
+      "weight": 0.5885
+    },
+    {
+      "feature": "emaSpread",
+      "weight": -0.0808
+    },
+    {
+      "feature": "leftMin",
+      "weight": -0.0625
+    },
+    {
+      "feature": "bbSpread",
+      "weight": -0.059
+    },
+    {
+      "feature": "volBps",
+      "weight": -0.049
+    },
+    {
+      "feature": "ret5Bps",
+      "weight": -0.0466
+    },
+    {
+      "feature": "ret1Bps",
+      "weight": -0.0463
+    },
+    {
+      "feature": "ret15Bps",
+      "weight": 0.0398
+    },
+    {
+      "feature": "volAccel",
+      "weight": -0.017
+    },
+    {
+      "feature": "volRatio",
+      "weight": 0.0124
+    },
+    {
+      "feature": "vwapSpread",
+      "weight": -0.0059
+    },
+    {
+      "feature": "rsi14",
+      "weight": 0.0024
+    }
+  ]
+}

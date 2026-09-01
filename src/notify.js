@@ -38,12 +38,23 @@ const signed = n => `${Number(n) < 0 ? '-' : '+'}$${Math.abs(Number(n) || 0).toF
 const arrow = dir => (dir === 'UP' ? '▲ UP' : '▼ DOWN');
 /**
  * What the BOOK thinks, taken straight from what we paid. A contract bought at 66c is the market
- * saying 66%, and printing it beside the model's own number is the one honest way to show what this
- * bot is actually betting: not "85% likely" but "the model is 19 points more sure than the book".
+ * saying 66%, and printing it beside the model's own number shows what this bot is actually betting:
+ * not "85% likely" but "the model disagrees with the price by 19 points".
  *
- * Measured over the 1,806-market research corpus, the printed model confidence averages 87.5% in the
- * band this bot trades while those entries settle at 68.2% — so the model number is optimistic and the
- * book number is closer to the truth. Showing both stops a 4/4 at 85% reading as near-certain.
+ * ── which number to trust, measured properly ──
+ *
+ * An earlier version of this comment said the model runs ~19 points hot. That came from 44 entries on a
+ * four-day corpus and it was wrong as a general claim. Over 386,958 out-of-sample rows across 68 days
+ * the model is if anything COLD — it says 54.7% where 61.3% happens, and at its own 80% gate it is right
+ * 91.9% of the time.
+ *
+ * The problem is not the model's calibration, it is which trades are affordable. On 24,542 priced rows
+ * the book scores AUC 0.8806 to the model's 0.8376, and in the one band this bot can pay for
+ * (confidence >=80 with an ask of 35-65c) the book's Brier is 0.249 against the model's 0.336 — the
+ * market says coin flip and is right, while the model says 85% and is wrong. The trades the model IS
+ * right about get priced at 90-98c, where they cannot pay.
+ *
+ * So both numbers are printed and the BOOK is the one to read. See research/corpus2/REBUILD.md.
  */
 const bookPct = price => {
   // Guard before Number(): Number(null) is 0, so a missing fill would print "book 0%" — a confident
@@ -141,8 +152,8 @@ async function entry(t, p, { live }) {
       `**${p.contracts} shares @ ${cents(p.price)}**`,
       `cost ${money(p.cost)}   ·   fee ${money(p.entryFee)}   ·   total ${money(p.total)}`,
       `📖 Read: ${readOf(p.style)}`,
-      `_The model says ${p.confidence}%; the price says ${bookPct(p.price)}. The gap IS the bet — and the ` +
-        `model runs optimistic, settling near 68% where it prints 87%. Read the book number as the honest one._`
+      `_The model says ${p.confidence}%; the price says ${bookPct(p.price)}. The gap IS the bet. Measured over ` +
+        `68 days the price is the better forecast where the two disagree — read the book number as the honest one._`
     ].join('\n'),
     inline: false
   });

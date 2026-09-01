@@ -20,3 +20,11 @@ bot-panel.log
 users.json
 globals.json
 licences.json
+
+# corpus2 raw data: 130 MB and fully regenerable by research/corpus2/fetch-*.js.
+# The small result files (evaluation/decisions/residual) ARE tracked — they are the evidence.
+research/corpus2/features.json
+research/corpus2/oos-predictions.json
+research/corpus2/candles/
+research/corpus2/markets.json
+research/corpus2/books.json

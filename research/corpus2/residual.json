@@ -1,0 +1,140 @@
+{
+  "rows": 14742,
+  "baseRate": 0.4435626102292769,
+  "book": {
+    "auc": 0.8733161380184278,
+    "brier": 0.14553042768959595,
+    "skill": 0.41036592908482616
+  },
+  "askOnly": {
+    "auc": 0.8729160963848657,
+    "brier": 0.14472536581808693,
+    "skill": 0.4136277343043431
+  },
+  "askPlusIndicators": {
+    "auc": 0.869274492673923,
+    "brier": 0.1471414725644445,
+    "skill": 0.4038385865691422
+  },
+  "brierGain": -0.0024161067463575603,
+  "weights": [
+    {
+      "feature": "logitAsk",
+      "weight": 2.9708
+    },
+    {
+      "feature": "z",
+      "weight": 0.2846
+    },
+    {
+      "feature": "emaSpread",
+      "weight": 0.2484
+    },
+    {
+      "feature": "rsi14",
+      "weight": -0.2061
+    },
+    {
+      "feature": "volBps",
+      "weight": -0.1279
+    },
+    {
+      "feature": "volAccel",
+      "weight": 0.1175
+    },
+    {
+      "feature": "bbSpread",
+      "weight": 0.1129
+    },
+    {
+      "feature": "vwapSpread",
+      "weight": -0.0676
+    },
+    {
+      "feature": "gapBps",
+      "weight": -0.0636
+    },
+    {
+      "feature": "ret15Bps",
+      "weight": -0.0495
+    },
+    {
+      "feature": "ret1Bps",
+      "weight": 0.021
+    },
+    {
+      "feature": "ret5Bps",
+      "weight": 0.0124
+    },
+    {
+      "feature": "volRatio",
+      "weight": 0.0095
+    },
+    {
+      "feature": "leftMin",
+      "weight": 0.0034
+    }
+  ],
+  "reliabilityB": [
+    {
+      "band": "0-10%",
+      "n": 2947,
+      "said": 0.0297,
+      "happened": 0.0424
+    },
+    {
+      "band": "10-20%",
+      "n": 1350,
+      "said": 0.1491,
+      "happened": 0.1637
+    },
+    {
+      "band": "20-30%",
+      "n": 1265,
+      "said": 0.2504,
+      "happened": 0.2316
+    },
+    {
+      "band": "30-40%",
+      "n": 1215,
+      "said": 0.3491,
+      "happened": 0.3185
+    },
+    {
+      "band": "40-50%",
+      "n": 1298,
+      "said": 0.4499,
+      "happened": 0.4114
+    },
+    {
+      "band": "50-60%",
+      "n": 1199,
+      "said": 0.5484,
+      "happened": 0.4996
+    },
+    {
+      "band": "60-70%",
+      "n": 1117,
+      "said": 0.6503,
+      "happened": 0.6168
+    },
+    {
+      "band": "70-80%",
+      "n": 1067,
+      "said": 0.7511,
+      "happened": 0.6748
+    },
+    {
+      "band": "80-90%",
+      "n": 1053,
+      "said": 0.8516,
+      "happened": 0.8006
+    },
+    {
+      "band": "90-100%",
+      "n": 2231,
+      "said": 0.9686,
+      "happened": 0.9538
+    }
+  ]
+}
