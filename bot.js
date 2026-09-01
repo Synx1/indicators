@@ -363,6 +363,21 @@ async function sweepStuck() {
 // ── SCAN ──
 async function scan() {
   if (state.open.length >= MAX_POS) return;
+
+  // ── CHOP GUARD ──
+  // The head-to-head showed our edge is real (25pp margin) but the win rate drops
+  // from 96.8% to 71% in the second half of the sample — regime shifts, where cheap
+  // directional bets get whipsawed. Losing streaks come from exactly there. When the
+  // last 2 SETTLED trades are both losses, the regime has turned choppy: pause new
+  // entries until a win breaks the streak. Open positions are untouched. This attacks
+  // the second-half weakness without loosening the profitable core (every looser lever
+  // tested worse). Settlement (WIN/LOSS) counts; a CASHOUT is a win.
+  const settled = state.trades.filter(t => t.result === 'WIN' || t.result === 'LOSS' || t.result === 'CASHOUT');
+  const last2 = settled.slice(-2);
+  if (last2.length === 2 && last2.every(t => t.result === 'LOSS')) {
+    return; // choppy — sit out until a win resets the streak
+  }
+
   for (const coin of COINS) {
     if (state.open.length >= MAX_POS) break;
     if (state.open.find(p => p.sym === coin.sym)) continue;
