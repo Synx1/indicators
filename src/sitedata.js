@@ -146,6 +146,9 @@ function publicState() {
   // throw — the dashboard must never be the reason a pass fails.
   let shadow = null;
   try { shadow = require('./shadow').report(); } catch (_) { shadow = null; }
+  // The depth experiment, so weeks of accumulation are visible instead of silent.
+  let depthReport = null;
+  try { depthReport = require('./depth').report(); } catch (_) { depthReport = null; }
 
   // Every tradeable coin appears, including ones with no closed trades yet, so an absent row means
   // "not traded" rather than "not shown". `trust` is deliberately conservative: a hit rate on fewer
@@ -199,7 +202,10 @@ function publicState() {
     // The shadow book is OPEN data: it is a measurement of the SIGNAL at prices the bot refuses, with
     // no account, no balance and no person in it. Served here rather than behind the token because it
     // answers a question about the strategy, not about anybody's money.
-    shadow
+    shadow,
+    // Same reasoning as the shadow book: a measurement of the SIGNAL, naming no account and no money,
+    // so it stays open. This one is the last untested hypothesis and it accrues forward only.
+    depth: depthReport
   };
 }
 

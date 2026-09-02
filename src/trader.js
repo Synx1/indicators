@@ -40,6 +40,7 @@ const auth = require('./kalshiauth');
 const notify = require('./notify');
 const activity = require('./activity');
 const shadow = require('./shadow');
+const depth = require('./depth');
 const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
 
 const axios = require('axios');
@@ -1526,6 +1527,16 @@ async function runOnce() {
       if (d.shadow) {
         try { shadow.record(d.shadow); }
         catch (e) { log(`  !! shadow record failed for ${coin.sym}: ${e.message}`); }
+        // Same row, for depth. Conditioning the depth sample on the price gate would leave it blind to
+        // the band where the model and the book disagree most, which is where the question lives.
+        try {
+          depth.observe({
+            ticker: d.shadow.ticker, sym: coin.sym, side: d.shadow.side,
+            confidence: d.shadow.confidence, confirm: d.shadow.confirm,
+            pricePct: Math.round(Number(d.shadow.price) * 100), minutesLeft: d.minutesLeft,
+            closeTime: d.shadow.closeTime, taken: false
+          });
+        } catch (e) { log(`  !! depth observe failed for ${coin.sym}: ${e.message}`); }
       }
       activity.push({
         sym: coin.sym, kind: 'SKIP', reason: d.skip, detail: d.why,
@@ -1534,6 +1545,16 @@ async function runOnce() {
       continue;
     }
     stats.decisions++;
+    // Log resting depth for this decision. Fire-and-forget: never awaited, because an HTTP request
+    // inside the pass ages every coin behind it. See src/depth.js — it is the last untested hypothesis
+    // and it cannot be backtested, so the sample has to start somewhere.
+    try {
+      depth.observe({
+        ticker: d.market.ticker, sym: coin.sym, side: d.side, confidence: d.confidence,
+        confirm: d.confirm, pricePct: d.pricePct, minutesLeft: d.minutesLeft,
+        closeTime: d.market.close_time, taken: true
+      });
+    } catch (e) { log(`  !! depth observe failed for ${coin.sym}: ${e.message}`); }
     activity.push({
       sym: coin.sym, kind: 'TAKEN', reason: 'signal',
       detail: `${d.direction} @${d.pricePct}¢ — ${d.confidence}% confidence, ${d.confirm}/4 ` +
@@ -1609,6 +1630,7 @@ async function settleShadows() {
     try { result = await resultFor({ ticker: row.ticker, sym: row.sym }); }
     catch (_) { continue; }                       // unresolved is normal; try again next pass
     if (!result) continue;
+    depth.settle(row.ticker, result, gradeWin);
     const graded = shadow.settle(row.ticker, result, gradeWin);
     if (graded) {
       // A market SKIP, so it carries no account and no money — it is a fact about the signal.

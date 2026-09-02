@@ -21,6 +21,7 @@ const auth = require('./src/kalshiauth');
 const kt = require('./src/kalshitrade');
 const gl = require('./src/markets');
 const shadow = require('./src/shadow');
+const depth = require('./src/depth');
 const panel = require('./src/panel');
 const trader = require('./src/trader');
 const notify = require('./src/notify');
@@ -86,6 +87,8 @@ gl.init({ log: line });
 // The shadow book, before the trader starts: it accumulates the out-of-sample sample that the entry
 // ceiling decision needs, and a restart must not reset it.
 shadow.init({ log: line });
+const depthRows = depth.init({ log: line });
+if (depthRows) line(`  depth sample: ${depthRows} rows already logged`);
 licences.init({ log: line });
 const store = users.init({ log: line });
 
