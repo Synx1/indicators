@@ -1,0 +1,1200 @@
+{
+ "at": 1788318868607,
+ "events": 12987,
+ "multi": 11528,
+ "mutex": 6070,
+ "mutexMulti": 6056,
+ "over": [
+  {
+   "t": "KXNFLFFLEADER-27QB",
+   "n": 25,
+   "sb": 1.15,
+   "sa": 1.74,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLOWTHOU-26SEP02",
+   "n": 6,
+   "sb": 1.08,
+   "sa": 1.28,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXCHINAAI-26SEP30",
+   "n": 9,
+   "sb": 1.07,
+   "sa": 1.21,
+   "cat": "Science and Technology"
+  },
+  {
+   "t": "KXNFLTEAMDPTS-LEAST27",
+   "n": 32,
+   "sb": 1.06,
+   "sa": 1.73,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLDROTY-27",
+   "n": 22,
+   "sb": 1.05,
+   "sa": 1.29,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLEXECOTY-27",
+   "n": 32,
+   "sb": 1.05,
+   "sa": 1.41,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLEADERNFLPTDS-27",
+   "n": 28,
+   "sb": 1.05,
+   "sa": 1.58,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXRANKLISTFFQB-27",
+   "n": 25,
+   "sb": 1.05,
+   "sa": 1.31,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLTEAMPTS-MOST27",
+   "n": 32,
+   "sb": 1.05,
+   "sa": 1.66,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXSERIEA-27",
+   "n": 20,
+   "sb": 1.04,
+   "sa": 1.25,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLPROOTY-27",
+   "n": 39,
+   "sb": 1.04,
+   "sa": 1.54,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLFFLEADER-27WR",
+   "n": 35,
+   "sb": 1.04,
+   "sa": 3.06,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXVMA-BL26",
+   "n": 8,
+   "sb": 1.04,
+   "sa": 1.75,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXWTA-26USO",
+   "n": 24,
+   "sb": 1.04,
+   "sa": 1.28,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXHIGHTATL-26SEP02",
+   "n": 6,
+   "sb": 1.04,
+   "sa": 1.1,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXMARMAD-27",
+   "n": 73,
+   "sb": 1.039,
+   "sa": 1.154,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLLM1-26DEC31",
+   "n": 8,
+   "sb": 1.036,
+   "sa": 1.094,
+   "cat": "Science and Technology"
+  },
+  {
+   "t": "KXHOUSEPOPVOTEMARGIN-27NOV03",
+   "n": 10,
+   "sb": 1.034,
+   "sa": 1.111,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXCABOUT-26MAY22",
+   "n": 21,
+   "sb": 1.03,
+   "sa": 1.29,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXNFLCOTY-27",
+   "n": 33,
+   "sb": 1.03,
+   "sa": 1.37,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXEFLCUP-27",
+   "n": 23,
+   "sb": 1.03,
+   "sa": 1.86,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMLBTEAMSTAT-26MOSTKS",
+   "n": 30,
+   "sb": 1.03,
+   "sa": 2.67,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNASCARRACE-COOOS26",
+   "n": 38,
+   "sb": 1.03,
+   "sa": 1.44,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLOWTDAL-26SEP02",
+   "n": 6,
+   "sb": 1.03,
+   "sa": 1.2,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXITALYDEPUTIES-27",
+   "n": 5,
+   "sb": 1.023,
+   "sa": 1.26,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXEPLLEADER-27GOAL",
+   "n": 32,
+   "sb": 1.02,
+   "sa": 1.45,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXGOLDVSSILVER-26DEC31",
+   "n": 2,
+   "sb": 1.02,
+   "sa": 1.07
+  },
+  {
+   "t": "KXNCAAFACC-26",
+   "n": 17,
+   "sb": 1.02,
+   "sa": 1.19,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXVMA-BHH26",
+   "n": 7,
+   "sb": 1.02,
+   "sa": 1.21,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXHIGHTPHX-26SEP02",
+   "n": 6,
+   "sb": 1.02,
+   "sa": 1.09,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXHIGHLAX-26SEP02",
+   "n": 6,
+   "sb": 1.02,
+   "sa": 1.09,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXCEARAGOV-26OCT04",
+   "n": 3,
+   "sb": 1.01,
+   "sa": 1.18,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXCOPADELREY-27",
+   "n": 23,
+   "sb": 1.01,
+   "sa": 1.35,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLEADERNFLPYDS-27",
+   "n": 28,
+   "sb": 1.01,
+   "sa": 1.38,
+   "cat": "Sports"
+  },
+  {
+   "t": "GOVPARTYTX-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.03,
+   "cat": "Elections"
+  },
+  {
+   "t": "GOVPARTYIA-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.03,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNFLNFCEAST-27",
+   "n": 4,
+   "sb": 1.01,
+   "sa": 1.05,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNFLAFCSOUTH-27",
+   "n": 4,
+   "sb": 1.01,
+   "sa": 1.05,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMOSD8-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.05,
+   "cat": "Elections"
+  },
+  {
+   "t": "SENATEIA-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.03,
+   "cat": "Elections"
+  },
+  {
+   "t": "HOUSETX15-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.04,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXUFCWELTERWEIGHTTITLE-26",
+   "n": 11,
+   "sb": 1.01,
+   "sa": 1.12,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXUFCLIGHTWEIGHTTITLE-26",
+   "n": 12,
+   "sb": 1.01,
+   "sa": 1.16,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMLBNLROTY-26",
+   "n": 30,
+   "sb": 1.01,
+   "sa": 1.32,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMLBALROTY-26",
+   "n": 30,
+   "sb": 1.01,
+   "sa": 1.37,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLTGOVTX-26",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.04,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLEADERWNBAAST-26",
+   "n": 20,
+   "sb": 1.01,
+   "sa": 1.95,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMLBNL-26",
+   "n": 15,
+   "sb": 1.01,
+   "sa": 1.19,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXFEDCOMBO-26SEPB",
+   "n": 6,
+   "sb": 1.01,
+   "sa": 1.1,
+   "cat": "Economics"
+  },
+  {
+   "t": "KXCYCLING-26VLTA",
+   "n": 184,
+   "sb": 1.01,
+   "sa": 3.1,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXPGASOLHEIM-SC26",
+   "n": 3,
+   "sb": 1.01,
+   "sa": 1.07,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXHIGHTSEA-26SEP02",
+   "n": 6,
+   "sb": 1.01,
+   "sa": 1.14,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXHIGHTNOLA-26SEP02",
+   "n": 6,
+   "sb": 1.01,
+   "sa": 1.11,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXT20MATCH-26SEP030800ZIMNAM",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.03,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXT20MATCH-26SEP020500TRIKOC",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.08,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02TOMPAN",
+   "n": 2,
+   "sb": 1.01,
+   "sa": 1.03,
+   "cat": "Sports"
+  },
+  {
+   "t": "SENATEGA-26",
+   "n": 2,
+   "sb": 1.003,
+   "sa": 1.008,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXBALANCEPOWERCOMBO-27FEB",
+   "n": 4,
+   "sb": 1.002,
+   "sa": 1.035,
+   "cat": "Elections"
+  },
+  {
+   "t": "GOVPARTYNY-26",
+   "n": 2,
+   "sb": 1.002,
+   "sa": 1.015,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXMLB-26",
+   "n": 30,
+   "sb": 1.002,
+   "sa": 1.062,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXDSENATESEATS-27",
+   "n": 10,
+   "sb": 1.001,
+   "sa": 1.075,
+   "cat": "Elections"
+  },
+  {
+   "t": "GOVPARTYIL-26",
+   "n": 2,
+   "sb": 1.001,
+   "sa": 1.015,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXRATECUTCOUNT-26DEC31",
+   "n": 21,
+   "sb": 1.001,
+   "sa": 1.046,
+   "cat": "Economics"
+  }
+ ],
+ "under": [
+  {
+   "t": "KXNETFLIXRANKSHOW-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.1,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNETFLIXRANKMOVIEGLOBAL-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.1,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNETFLIXRANKMOVIE-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.1,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNETFLIXRANKSHOWGLOBAL-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.11,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXSTATE51-29",
+   "n": 8,
+   "sb": 0.103,
+   "sa": 0.134,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXNETFLIXRANKSHOWRUNNERUP-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.15,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXLAPRIMARY-01D26",
+   "n": 2,
+   "sb": 0.123,
+   "sa": 0.17,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNETFLIXRANKMOVIERUNNERUP-26SEP07",
+   "n": 10,
+   "sb": 0.07,
+   "sa": 0.17,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXLAPRIMARY-02D26",
+   "n": 2,
+   "sb": 0.104,
+   "sa": 0.179,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-01R26",
+   "n": 2,
+   "sb": 0.102,
+   "sa": 0.185,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNBERRECESSQ",
+   "n": 6,
+   "sb": 0.026,
+   "sa": 0.203,
+   "cat": "Economics"
+  },
+  {
+   "t": "KXLAPRIMARY-06R26",
+   "n": 4,
+   "sb": 0.061,
+   "sa": 0.215,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-04D26",
+   "n": 2,
+   "sb": 0.144,
+   "sa": 0.228,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-05D26",
+   "n": 5,
+   "sb": 0.14,
+   "sa": 0.256,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-03D26",
+   "n": 3,
+   "sb": 0.16,
+   "sa": 0.258,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-05R26",
+   "n": 7,
+   "sb": 0.073,
+   "sa": 0.261,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXLAPRIMARY-04R26",
+   "n": 3,
+   "sb": 0.161,
+   "sa": 0.276,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNEWPOPE-70",
+   "n": 7,
+   "sb": 0.206,
+   "sa": 0.288,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNEXTTEAMNFL-26BSOR",
+   "n": 32,
+   "sb": 0,
+   "sa": 0.32,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMODELHIGH-27-1550",
+   "n": 8,
+   "sb": 0.21,
+   "sa": 0.36,
+   "cat": "Science and Technology"
+  },
+  {
+   "t": "KXACQUANNOUNCEPINS-27JAN01",
+   "n": 6,
+   "sb": 0.1,
+   "sa": 0.36,
+   "cat": "Financials"
+  },
+  {
+   "t": "KXNEWROLEX-27JAN",
+   "n": 8,
+   "sb": 0.12,
+   "sa": 0.39,
+   "cat": "Companies"
+  },
+  {
+   "t": "KXNETFLIXRANKSHOWGLOBAL2-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.39,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNETFLIXRANKMOVIEGLOBAL2-26SEP07",
+   "n": 10,
+   "sb": 0,
+   "sa": 0.4,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNCAAMBNEXTCOACH-KU26",
+   "n": 25,
+   "sb": 0.13,
+   "sa": 0.41,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXDCCCCHAIR-27MAR02",
+   "n": 9,
+   "sb": 0.099,
+   "sa": 0.433,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXGOOGLESEARCH-TVS27",
+   "n": 6,
+   "sb": 0.2,
+   "sa": 0.6,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXWORDOFTHEYEAR-26DEC",
+   "n": 8,
+   "sb": 0.31,
+   "sa": 0.61,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXMINLEAD120-26NOV30",
+   "n": 13,
+   "sb": 0.49,
+   "sa": 0.73,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXRANKLISTGOOGLESEARCH2-26DEC",
+   "n": 11,
+   "sb": 0.39,
+   "sa": 0.76,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXVPRESNOMR-28",
+   "n": 22,
+   "sb": 0.668,
+   "sa": 0.79,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXRANKLISTGOOGLESEARCH-26DEC",
+   "n": 16,
+   "sb": 0.58,
+   "sa": 0.79,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXTOPMODEL-26SEP30",
+   "n": 5,
+   "sb": 0.67,
+   "sa": 0.79,
+   "cat": "Science and Technology"
+  },
+  {
+   "t": "KXPRESMATCHUP-28NOV07",
+   "n": 16,
+   "sb": 0.592,
+   "sa": 0.809,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXMLBGG-26AL2B",
+   "n": 8,
+   "sb": 0.41,
+   "sa": 0.82,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXKOSOVOPRES-27JAN01",
+   "n": 10,
+   "sb": 0.29,
+   "sa": 0.84,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNEXTMANAGERMLB-PHI26",
+   "n": 10,
+   "sb": 0.48,
+   "sa": 0.84,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXCLOSESTGOVERNOR-27JAN20",
+   "n": 14,
+   "sb": 0.598,
+   "sa": 0.842,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXPRESTAIWAN-28",
+   "n": 3,
+   "sb": 0.658,
+   "sa": 0.85,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXFEDDECISION-27APR",
+   "n": 5,
+   "sb": 0.8,
+   "sa": 0.85,
+   "cat": "Economics"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W2R1",
+   "n": 11,
+   "sb": 0.17,
+   "sa": 0.85,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXPRESNOMG-28",
+   "n": 6,
+   "sb": 0.446,
+   "sa": 0.857,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXMONGOLIAPRES-27",
+   "n": 5,
+   "sb": 0.629,
+   "sa": 0.857,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXDTICKET-28NOV07",
+   "n": 25,
+   "sb": 0.203,
+   "sa": 0.86,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W3R1",
+   "n": 11,
+   "sb": 0.22,
+   "sa": 0.87,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXTRUMPPHOTO-26SEP06",
+   "n": 4,
+   "sb": 0.82,
+   "sa": 0.88,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXSENATENYD-28",
+   "n": 3,
+   "sb": 0.81,
+   "sa": 0.89,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXTHEGAMBIAPRES-26",
+   "n": 4,
+   "sb": 0.697,
+   "sa": 0.89,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXMLBGG-26ALP",
+   "n": 12,
+   "sb": 0.15,
+   "sa": 0.89,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXPHILIPPINESSENATE-28",
+   "n": 2,
+   "sb": 0.75,
+   "sa": 0.9,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W4R1",
+   "n": 11,
+   "sb": 0.24,
+   "sa": 0.91,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNEWROLEGS-35DEC",
+   "n": 6,
+   "sb": 0.55,
+   "sa": 0.92,
+   "cat": "Financials"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W6R1",
+   "n": 11,
+   "sb": 0.24,
+   "sa": 0.92,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W5R1",
+   "n": 11,
+   "sb": 0.24,
+   "sa": 0.92,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXFLINTMAYOR-26",
+   "n": 2,
+   "sb": 0.8,
+   "sa": 0.92,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXFEDDECISION-27MAR",
+   "n": 5,
+   "sb": 0.88,
+   "sa": 0.93,
+   "cat": "Economics"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W8R1",
+   "n": 11,
+   "sb": 0.24,
+   "sa": 0.93,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMOLDOVAPRES-28",
+   "n": 7,
+   "sb": 0.688,
+   "sa": 0.94,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNCAAMBAPRANK-26W7R1",
+   "n": 11,
+   "sb": 0.25,
+   "sa": 0.94,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXTRUMPAGCOUNT-29",
+   "n": 4,
+   "sb": 0.757,
+   "sa": 0.95,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXMLBGG-26AL1B",
+   "n": 8,
+   "sb": 0.46,
+   "sa": 0.95,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXNJGOLFVISITCOUNT-26SEP",
+   "n": 5,
+   "sb": 0.61,
+   "sa": 0.95,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXNEXTDEPUTYAG-28JAN01",
+   "n": 6,
+   "sb": 0.54,
+   "sa": 0.96,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXVMA-BE26",
+   "n": 7,
+   "sb": 0.59,
+   "sa": 0.96,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNFLSTAGEOFELIM-27CHI",
+   "n": 6,
+   "sb": 0.82,
+   "sa": 0.97,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXDTEMMYS-COURTROOM26",
+   "n": 5,
+   "sb": 0.68,
+   "sa": 0.97,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXWTASETWINNER-26AUG30JOVFRE-1",
+   "n": 2,
+   "sb": 0.93,
+   "sa": 0.97,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXWC-30",
+   "n": 82,
+   "sb": 0.704,
+   "sa": 0.975,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXPRESTURKEYR1-28",
+   "n": 3,
+   "sb": 0.792,
+   "sa": 0.98,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXHOUSEWINSTATE-NCD",
+   "n": 7,
+   "sb": 0.79,
+   "sa": 0.98,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXSECSTATEIN-26",
+   "n": 2,
+   "sb": 0.9,
+   "sa": 0.98,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXBRGOVMOSTSEATS-26OCT04",
+   "n": 8,
+   "sb": 0.74,
+   "sa": 0.98,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXHIGHNY-26SEP02",
+   "n": 6,
+   "sb": 0.91,
+   "sa": 0.98,
+   "cat": "Climate and Weather"
+  },
+  {
+   "t": "KXCS2GAME-26SEP021330WBTADON",
+   "n": 2,
+   "sb": 0.92,
+   "sa": 0.98,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFDOUBLES-26SEP02LARMENFITMUN",
+   "n": 2,
+   "sb": 0.12,
+   "sa": 0.98,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02LONCAR",
+   "n": 2,
+   "sb": 0.95,
+   "sa": 0.98,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLONDONMAYOR-28MAY01",
+   "n": 8,
+   "sb": 0.561,
+   "sa": 0.986,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXNEXTSTATE-29",
+   "n": 5,
+   "sb": 0.781,
+   "sa": 0.99,
+   "cat": "Politics"
+  },
+  {
+   "t": "GOVPARTYFL-26",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Elections"
+  },
+  {
+   "t": "GOVPARTYNV-26",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Elections"
+  },
+  {
+   "t": "KXBIGBROTHERRANK-26DEC31R3",
+   "n": 17,
+   "sb": 0.78,
+   "sa": 0.99,
+   "cat": "Entertainment"
+  },
+  {
+   "t": "KXNCAAFCUSA-26",
+   "n": 10,
+   "sb": 0.79,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXMLBALEAST-26",
+   "n": 5,
+   "sb": 0.93,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXTRUTHSOCIAL-26SEP05",
+   "n": 10,
+   "sb": 0.89,
+   "sa": 0.99,
+   "cat": "Politics"
+  },
+  {
+   "t": "KXCOUNTYCHAMPMATCH-26SEP020530WARHAM",
+   "n": 2,
+   "sb": 0.92,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLOLGAME-26SEP040500ALLGD",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02RASVAN",
+   "n": 2,
+   "sb": 0.96,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXCS2GAME-26SEP021300NTRHOTU",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02MARSCH",
+   "n": 2,
+   "sb": 0.78,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXLOLGAME-26SEP021100UCAMKOIA",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02ELSBED",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXWTASETWINNER-26SEP02SABIAT-1",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXWTASETWINNER-26SEP02KOSSTE-2",
+   "n": 2,
+   "sb": 0.96,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02VANPIK",
+   "n": 2,
+   "sb": 0.94,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02LOMFIO",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02HOROET",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXCS2GAME-26SEP020800PAINHOTU",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02QUEDIA",
+   "n": 2,
+   "sb": 0.96,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFWMATCH-26SEP02MATCHE",
+   "n": 2,
+   "sb": 0.96,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02CIGREN",
+   "n": 2,
+   "sb": 0.96,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02BATBRA",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02SARPOP",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02MARADM",
+   "n": 2,
+   "sb": 0.97,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02TENRIS",
+   "n": 2,
+   "sb": 0.94,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXITFMATCH-26SEP02MELBRE",
+   "n": 2,
+   "sb": 0.95,
+   "sa": 0.99,
+   "cat": "Sports"
+  },
+  {
+   "t": "KXCLOSESTSENATE-27JAN03",
+   "n": 17,
+   "sb": 0.874,
+   "sa": 0.993,
+   "cat": "Elections"
+  },
+  {
+   "t": "SENATENY-28",
+   "n": 2,
+   "sb": 0.881,
+   "sa": 0.998,
+   "cat": "Elections"
+  }
+ ]
+}

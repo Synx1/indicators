@@ -28,3 +28,8 @@ research/corpus2/oos-predictions.json
 research/corpus2/candles/
 research/corpus2/markets.json
 research/corpus2/books.json
+
+# Raw research corpora. paths.jsonl is 8MB of per-minute Kalshi book history and grows toward ~35MB
+# for the full 45,030 markets; it is refetchable with research/arb/paths.js and does not belong in git.
+research/arb/paths.jsonl
+research/arb/*.jsonl

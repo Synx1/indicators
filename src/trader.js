@@ -32,6 +32,7 @@
  */
 
 const decide = require('./decide');
+const favourite = require('./favourite');
 const gl = require('./markets');
 const users = require('./users');
 const book = require('./book');
@@ -41,7 +42,7 @@ const notify = require('./notify');
 const activity = require('./activity');
 const shadow = require('./shadow');
 const depth = require('./depth');
-const { KALSHI_API_BASE, COINBASE_BASE } = require('./config');
+const { KALSHI_API_BASE, COINBASE_BASE, STRATEGY } = require('./config');
 
 const axios = require('axios');
 
@@ -364,14 +365,18 @@ const noteSkip = code => { stats.skips[code] = (stats.skips[code] || 0) + 1; };
  * soonest-closing market from that list, locked onto a dead round, and sat idle for two hours
  * with a perfectly healthy loop.
  */
-async function findActive(series) {
+async function findActive(series, lo = MIN_MINUTES, hi = MAX_MINUTES) {
   const url = `${KALSHI_API_BASE}/markets?series_ticker=${series}&status=open&limit=10`;
   const { data } = await axios.get(url, { timeout: 15000 });
   const now = Date.now();
+  // The bounds are arguments because the two gates want different clocks. The model gate wants 8-14
+  // minutes, where its spot-vs-strike read has room to be meaningful. The favourite gate wants 6-12,
+  // where the measured edge lives — its cells turn negative by T-3. Hard-coding one window would have
+  // silently traded the other gate outside the range it was measured in.
   return (data.markets || []).find(m => {
     if (!m || !m.close_time) return false;
     const ml = (new Date(m.close_time).getTime() - now) / 60000;
-    return ml > MIN_MINUTES && ml < MAX_MINUTES;
+    return ml > lo && ml < hi;
   }) || null;
 }
 
@@ -443,6 +448,58 @@ function diagnosticText(d) {
 // ── one market, one decision ────────────────────────────────────
 
 /**
+ * The favourite gate applied to one round.
+ *
+ * Returns a full decision when the book is offering a side at 85-90c inside the clock window, or a skip
+ * carrying the reason. Shaped exactly like the model gate's return so sizing, the position book, the DM
+ * and the site all read it without knowing which gate produced it — the `strategy` field is what tells
+ * them apart afterwards.
+ *
+ * The quote is re-fetched here rather than reused from the round lookup. That lookup happened before this
+ * function was reached, and a 15-minute binary can move 20-30 cents in a second near the strike; two paper
+ * misses in August read "wanted 56c, now 82c" for exactly that reason. The price this gate refuses on and
+ * the price it records must both be what is offered NOW.
+ */
+async function favouriteFor(coin, market, strike, s, candles) {
+  const ml = (new Date(market.close_time).getTime() - Date.now()) / 60000;
+  const fresh = await getMarket(market.ticker);
+  const quoted = fresh || market;
+  const r = favourite.evaluate({
+    yesAsk: parseFloat(quoted.yes_ask_dollars || 0),
+    noAsk: parseFloat(quoted.no_ask_dollars || 0),
+    yesBid: parseFloat(quoted.yes_bid_dollars || 0),
+    minutesLeft: ml
+  });
+  if (r.skip) return { skip: r.skip, why: r.why };
+
+  // The indicators and the spot are reported, never gated on. They are already in hand, they make the DM
+  // and the site legible, and keeping them out of the decision is the point: the measured edge was taken
+  // over every market, not over the subset where four indicators happened to agree.
+  const rsi = candles && candles.length ? decide.calcRSI(candles) : null;
+  const diagnostics = (candles && candles.length && s)
+    ? marketDiagnostics(candles, s.price, strike) : {};
+
+  return {
+    sym: coin.sym, market: quoted, observation: { ticker: quoted.ticker, side: r.side, confidence: r.winPct },
+    strategy: 'FAVOURITE',
+    exchangeIndex: market.exchange_index == null ? null : Number(market.exchange_index),
+    strike, minutesLeft: ml,
+    side: r.side, direction: r.side === 'YES' ? 'UP' : 'DOWN',
+    // Confidence here is the price plus the out-of-sample edge, not a model output. It is the only honest
+    // number available: the book's own estimate, corrected by the one amount that was measured on data
+    // that did not choose the band.
+    confidence: r.winPct, z: null, confirm: null,
+    rsi: rsi == null ? null : Math.round(rsi),
+    price: r.price, pricePct: Math.round(r.price * 100),
+    style: 'FAVOURITE',
+    spot: s ? s.price : null, spotAgeMs: s ? s.ageMs : null, candleAgeMs: null,
+    modelPct: r.winPct, edgePt: r.edgePt,
+    breakEvenPct: r.breakEvenPct, feePt: r.feePt, spread: r.spread,
+    ...diagnostics
+  };
+}
+
+/**
  * Decide for one market. Returns a decision, or a skip with the reason.
  *
  * Pure of side effects beyond the network reads, so the loop can be reasoned about and the same
@@ -460,12 +517,31 @@ async function decideFor(coin) {
   // They are independent — two Coinbase reads and one Kalshi read — and running them in series cost
   // most of a second per coin, all of it staleness by the time the price gate ran. The candle read is
   // usually a cache hit, so this is normally two requests in the time one used to take.
-  let market, s, candles;
+  // ── the clock the round is chosen against ──
+  //
+  // Each gate was measured inside its own window and must not be traded outside it. Running 'both'
+  // widens the search to the union and lets each gate refuse what is outside its own range, rather than
+  // quietly handing the favourite gate a 13-minute market it has no measurement for.
+  const wantFav = STRATEGY === 'favourite' || STRATEGY === 'both';
+  const wantModel = STRATEGY === 'model' || STRATEGY === 'both';
+  const loMin = wantFav ? Math.min(favourite.FAV_MIN_LEFT, wantModel ? MIN_MINUTES : 99) : MIN_MINUTES;
+  const hiMin = wantFav ? Math.max(favourite.FAV_MAX_LEFT, wantModel ? MAX_MINUTES : 0) : MAX_MINUTES;
+
+  // ── a dead price feed must not silence the book ──
+  //
+  // The candle read used to be able to throw straight out of this Promise.all, which ended the pass before
+  // any gate ran. That is right for the model gate, which cannot form a view without candles, and wrong for
+  // the favourite gate, which never looks at them: the signal there IS the order book. Letting a Coinbase
+  // outage cancel an order-book signal would hand the price feed a veto over a decision it has no part in.
+  //
+  // So the feed failure is CARRIED rather than thrown. findActive still throws — no round means no trade
+  // either way — and the model path below re-raises the rate-limit cooldown that used to happen here.
+  let market, s, candles, feedErr = null;
   try {
     [market, s, candles] = await Promise.all([
-      findActive(coin.series),
-      getSpot(coin.product),
-      getCandles(coin.product)
+      findActive(coin.series, loMin, hiMin),
+      getSpot(coin.product).catch(e => { feedErr = feedErr || e; return null; }),
+      getCandles(coin.product).catch(e => { feedErr = feedErr || e; return []; })
     ]);
   } catch (e) {
     if (isRateLimit(e)) {
@@ -475,10 +551,39 @@ async function decideFor(coin) {
     return { skip: 'error', why: e.message };
   }
 
-  if (!market) return { skip: 'no-window', why: `no round between ${MIN_MINUTES} and ${MAX_MINUTES} minutes out` };
+  // The bounds, not the model gate's constants. Under STRATEGY=favourite the search window is 6-12
+  // minutes, and a message reading "between 8 and 14" would send anybody reading the pass log looking for
+  // a bug in the wrong gate.
+  if (!market) return { skip: 'no-window', why: `no round between ${loMin} and ${hiMin} minutes out` };
 
   const strike = parseFloat(market.floor_strike);
   if (!(strike > 0)) return { skip: 'no-strike', why: 'market has no floor strike' };
+
+  // ── the favourite gate, before anything that reads a price feed ──
+  //
+  // Deliberately ahead of the spot and candle checks, because it needs neither. The signal is the order
+  // book, so a stale Coinbase candle or an unreadable ticker cannot make this gate wrong — which is the
+  // whole failure class that once cost 85% of the bankroll. It also has to run before the model's gates
+  // rather than after them: the edge was measured on ALL markets, and only offering it rounds that
+  // already cleared 80% confidence and 3-of-4 indicators would be a different population than the one
+  // the number came from.
+  if (wantFav) {
+    const fav = await favouriteFor(coin, market, strike, s, candles);
+    // A hit is the decision. A miss is only the final answer when the model gate is not also running —
+    // under 'both' the round falls through and gets its second look.
+    if (fav && !fav.skip) return fav;
+    if (fav && fav.skip && !wantModel) return fav;
+  }
+
+  // The cooldown the Promise.all used to raise. Reached only on the model path, which is the only one that
+  // needs the feed, so a rate limit still backs the coin off instead of hammering the endpoint.
+  if (feedErr) {
+    if (isRateLimit(feedErr)) {
+      coolDown(coin.sym, 'rate limited by the data feed');
+      return { skip: 'cooling', why: 'rate limited — backing off' };
+    }
+    return { skip: 'error', why: feedErr.message };
+  }
 
   if (!s) return { skip: 'no-spot', why: 'ticker unreadable or its timestamp missing' };
   if (s.ageMs > MAX_SPOT_AGE_MS) {
@@ -492,6 +597,12 @@ async function decideFor(coin) {
   }
 
   const minutesLeft = (new Date(market.close_time).getTime() - Date.now()) / 60000;
+  // Under 'both' the round lookup widened to the union of the two windows, so a market the favourite gate
+  // wanted can reach here outside the range the model gate was measured in. Refused explicitly rather than
+  // traded on an extrapolation.
+  if (minutesLeft <= MIN_MINUTES || minutesLeft >= MAX_MINUTES) {
+    return { skip: 'no-window', why: `${minutesLeft.toFixed(1)}m left is outside ${MIN_MINUTES}-${MAX_MINUTES}m` };
+  }
   const r = decide.engineEvaluate(s.price, strike, minutesLeft, candles);
   if (!r.side) return { skip: 'no-read', why: 'model produced no side' };
   const observation = r.confidence >= SIGNAL_OBSERVE_CONF

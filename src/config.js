@@ -168,6 +168,19 @@ module.exports = {
   KEY_DIR_PERSISTENT,
   INSTANCE,
 
+  // ── which gate decides ──
+  //
+  // 'favourite' buys the side the book already favours at 85-90c (src/favourite.js); 'model' is the
+  // original spot-vs-strike read with four indicators confirming (src/decide.js); 'both' runs the
+  // favourite gate first and falls back to the model when it does not fire.
+  //
+  // The default is 'favourite' because the model gate was measured over 68 days and 45,030 settled
+  // markets and is fairly priced — its realised win rate equals the price it pays, so the fee is the
+  // whole result. The favourite gate is the one configuration that earned above its own break-even on
+  // data that had no part in choosing it. Changing the default cannot move real money by itself:
+  // `armed` is forced false on every startup, so live trading still needs somebody to arm it.
+  STRATEGY: (process.env.STRATEGY || 'favourite').toLowerCase(),
+
   // ── web ──
   PORT: Number(process.env.PORT || 3000),
   // Gates the web dashboard. Unset means the site serves only what is safe to serve openly.

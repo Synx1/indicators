@@ -18,6 +18,12 @@
 const assert = require('assert');
 const Module = require('module');
 
+// This file is about the MODEL gate's wiring, so it pins the strategy to 'model' before config is read.
+// The shipped default is 'favourite' (src/favourite.js), which decides from the order book and never
+// reaches engineEvaluate — under that default every assertion here would pass for the wrong reason, which
+// is exactly the failure this file was written to catch.
+process.env.STRATEGY = 'model';
+
 // ── the stub network ──
 let SPOT = 100.05;          // spot the ticker reports
 let STRIKE = 100;           // the market's floor_strike
