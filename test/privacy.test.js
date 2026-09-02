@@ -152,6 +152,24 @@ for (const e of events) {
   ok(!(e.meta && 'pnl' in e.meta), `${e.kind}: meta.pnl is gone`);
   ok(!(e.meta && 'seq' in e.meta), `${e.kind}: the book sequence number is gone`);
 }
+// ── 2b. /api/series is open too, so it gets the same interrogation ─────────────
+//
+// The chart's series is market data — a price, a strike, a quote, an indicator, a skip reason — and it is
+// served without a token for the same reason the decisions feed is. That makes "does it name anybody" a
+// question this file has to answer, not the module's own suite: the route lists above are hand-written, so
+// a new open route is only covered here if somebody adds it. This is that line.
+const ser = GET('/api/series?sym=BTC');
+eq(ser.code, 200, 'the series is open — a chart with no price is not a chart');
+ok(!ser.body.includes(TAG), 'no account handle in the open series payload');
+ok(!ser.body.includes(UID), 'no Discord user ID in the open series payload');
+for (const k of ['who', 'bankroll', '"pnl"', 'userId']) {
+  ok(!ser.body.includes(k), `no ${k} in the open series payload`);
+}
+const serBad = GET('/api/series?sym=../../etc/passwd');
+eq(serBad.code, 200, 'an unknown market answers rather than erroring');
+eq(JSON.parse(serBad.body).ok, false, 'and says it is not a market');
+eq(JSON.parse(serBad.body).points, [], 'and hands back no points');
+
 // Redaction must keep what makes the feed worth reading.
 const byReason = r => events.find(e => e.reason === r);
 eq(byReason('won').detail, 'DOWN @57¢ settled 100¢, $—', 'a settle keeps its market facts');

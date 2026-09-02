@@ -89,6 +89,19 @@ tbody tr:hover{background:#15171e}
 .mkt span.on{background:rgba(61,220,132,.12);color:var(--up)}
 .note{color:var(--faint);font-size:12.5px;line-height:1.6;margin-top:14px;max-width:74ch}
 .empty{color:var(--faint);padding:26px 10px;font-size:13.5px}
+.coinbar{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+.coinbar button{background:#161922;color:var(--dim);border:1px solid var(--line2);border-radius:7px;
+  padding:6px 11px;font:600 12px/1 inherit;cursor:pointer;letter-spacing:.03em}
+.coinbar button[aria-selected=true]{background:rgba(122,162,255,.14);color:var(--accent);
+  border-color:var(--accent)}
+.coinbar button.off{opacity:.42}
+.chartwrap{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:12px 10px 4px}
+.chartwrap+.chartwrap{margin-top:10px}
+.chartwrap svg{display:block;width:100%;height:auto;overflow:visible}
+.legend{display:flex;gap:15px;flex-wrap:wrap;color:var(--faint);font-size:11.5px;padding:9px 4px 3px}
+.legend i{display:inline-block;width:10px;height:2px;vertical-align:middle;margin-right:5px}
+.legend i.sq{width:7px;height:7px;border-radius:1px}
+.readout{font-family:var(--mono);font-size:11.5px;color:var(--dim);padding:7px 4px 2px;min-height:18px}
 .bars{display:grid;grid-template-columns:auto 1fr auto;gap:5px 12px;align-items:center;
   font-size:13px;margin-top:4px}
 .bars .lbl{color:var(--dim)}
@@ -114,6 +127,7 @@ tbody tr:hover{background:#15171e}
 <nav id=tabs>
   <button data-t=decisions aria-selected=true>Decisions<span class=count id=cdec></span></button>
   <button data-t=coins aria-selected=false>Coins<span class=count id=ccoin></span></button>
+  <button data-t=chart aria-selected=false>Chart<span class=count id=cchr></span></button>
   <button data-t=trades aria-selected=false>Trades<span class=count id=ctra></span></button>
   <button data-t=hours aria-selected=false>Hours<span class=count id=chrs></span></button>
   <button data-t=gates aria-selected=false>Gates<span class=count id=cgat></span></button>
@@ -136,6 +150,20 @@ tbody tr:hover{background:#15171e}
   when the entry gate changed, and the 100% ones were 7 and 9 trades. So this table is the real
   scoreboard: settled trades only, as they land. Read the <b>trust</b> column before the win rate.
   Nothing here is per-account — it is the fleet total, so it names nobody.</div>
+</section>
+<section id=s-chart>
+  <div class=coinbar id=coinbar></div>
+  <div id=chrbody></div>
+  <div class=note><b>What the bot saw, one point per scan pass.</b> The price line is the spot the bot
+  actually read on that pass, not a fresh pull — a chart drawn from a later fetch would show a price no
+  decision was ever made against. The <b>Kalshi ask</b> is the line that matters: on this strategy the
+  entry is decided from the order book and the clock, and from nothing else.<br><br>
+  <b>The indicators below are observed, not used.</b> RSI, drift and realised volatility are recorded here
+  because a chart is more legible with them, but they are not inputs — measured over 386,958 rows, adding
+  the indicators on top of the ask made the forecast <em>worse</em>. Treating this strip as the reason for
+  an entry would be reading it backwards.<br><br>
+  Buy and sell marks need the token, because a fill is somebody's position. The series itself names
+  nobody, so it stays open.</div>
 </section>
 <section id=s-trades><div id=trabody></div></section>
 <section id=s-hours><div id=hrsbody></div></section>
@@ -181,7 +209,9 @@ $('tabs').addEventListener('click', e => {
   tab = b.dataset.t;
   [...$('tabs').querySelectorAll('button')].forEach(x =>
     x.setAttribute('aria-selected', String(x.dataset.t === tab)));
-  ['decisions','coins','trades','hours','setup','accounts'].forEach(t =>
+  // Every section, not a subset. 'gates' was missing from this list, so selecting that tab hid every
+  // other section and never showed its own — a blank page on a tab that had a working renderer.
+  ['decisions','coins','chart','trades','hours','gates','setup','accounts'].forEach(t =>
     $('s-' + t).classList.toggle('on', t === tab));
   refresh();
 });
@@ -527,6 +557,266 @@ function renderAccounts(d) {  if (d.locked) { $('accbody').innerHTML = lockedBox
     }).join('') + '</tbody></table>';
 }
 
+
+// ── the chart ────────────────────────────────────────────────────────────────────────────────────
+//
+// Inline SVG, built as a string, no library. The rest of this page is one self-contained file served by
+// the trading process; pulling a charting bundle off a CDN would put a third party in the path of the
+// page you check when you want to know whether the bot is alive.
+
+var chartSym = 'BTC';
+var chartPts = [];
+var chartGeom = null;
+
+function coinButtons(pub) {
+  var ms = (pub && pub.markets) || [];
+  if (!ms.length) return '';
+  return ms.map(function (m) {
+    return '<button data-c="' + m.sym + '" aria-selected="' + (m.sym === chartSym) + '"' +
+      (m.on ? '' : ' class=off') + '>' + m.sym + (m.on ? '' : ' · off') + '</button>';
+  }).join('');
+}
+
+// Segments rather than one polyline: a gap in the data must show as a gap. Joining across a null would
+// draw a straight line through a period the bot could not read a price, which is the most misleading
+// thing a price chart can do.
+// NOTE ON ' />': the space is load-bearing. This page is parsed as HTML, not XML, so an unquoted
+// attribute value directly before '/>' swallows the slash — 'stroke-width=1/>' becomes
+// stroke-width="1/" on an element that never closes, and every element after it becomes its child.
+// Children of <line> are not rendered, so the whole chart silently drew nothing but the axes.
+function segs(pts, pick, X, Y) {
+  var out = [], cur = [];
+  for (var i = 0; i < pts.length; i++) {
+    var v = pick(pts[i]);
+    if (v === null || v === undefined || !isFinite(v)) { if (cur.length > 1) out.push(cur); cur = []; continue; }
+    cur.push(X(pts[i].at).toFixed(1) + ',' + Y(v).toFixed(1));
+  }
+  if (cur.length > 1) out.push(cur);
+  return out.map(function (c) { return c.join(' '); });
+}
+
+function niceNum(v, dp) {
+  if (v === null || v === undefined || !isFinite(v)) return '—';
+  return Number(v).toFixed(dp === undefined ? 2 : dp);
+}
+
+function renderChart(d, tr, pub) {
+  $('coinbar').innerHTML = coinButtons(pub);
+  var body = $('chrbody');
+  if (!d || !d.ok) { body.innerHTML = '<div class=empty>' + esc((d && d.why) || 'no series yet') + '</div>'; return; }
+  var pts = (d.points || []).filter(function (p) { return p && p.at; });
+  chartPts = pts;
+  if (pts.length < 2) {
+    body.innerHTML = '<div class=empty>Only ' + pts.length + ' observation' + (pts.length === 1 ? '' : 's') +
+      ' for ' + esc(d.sym) + ' so far. The scanner records one per pass — give it a few minutes.</div>';
+    return;
+  }
+
+  var W = 1000, PL = 54, PR = 48, H1 = 250, H2 = 78, H3 = 78, GAP = 8;
+  var t0 = pts[0].at, t1 = pts[pts.length - 1].at, span = (t1 - t0) || 1;
+  var X = function (t) { return PL + ((t - t0) / span) * (W - PL - PR); };
+
+  // Price scale spans the spot AND the strike: a strike drawn off the top of the panel is worse than no
+  // strike, because the distance to it is the whole question the market is asking.
+  var vals = [];
+  pts.forEach(function (p) {
+    if (isFinite(p.spot) && p.spot !== null) vals.push(p.spot);
+    if (isFinite(p.strike) && p.strike !== null) vals.push(p.strike);
+  });
+  if (!vals.length) { body.innerHTML = '<div class=empty>no price in the series yet</div>'; return; }
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  var padv = (hi - lo) * 0.08 || (hi * 0.001) || 1;
+  lo -= padv; hi += padv;
+  var Y1 = function (v) { return 12 + (1 - (v - lo) / (hi - lo)) * (H1 - 24); };
+  // The ask axis is fixed 0..1, never autoscaled. The 85-90c band has to sit in the same place on every
+  // coin or the one thing this chart exists to show — how far the book is from the gate — moves around.
+  var Ya = function (v) { return 12 + (1 - v) * (H1 - 24); };
+
+  var svg = [];
+  svg.push('<svg viewBox="0 0 ' + W + ' ' + H1 + '" preserveAspectRatio="none" id=chsvg>');
+  // the gate band, on the ask axis
+  svg.push('<rect x=' + PL + ' y=' + Ya(0.90).toFixed(1) + ' width=' + (W - PL - PR) +
+    ' height=' + (Ya(0.85) - Ya(0.90)).toFixed(1) + ' fill="rgba(255,200,87,.10)"/>');
+  svg.push('<text x=' + (W - PR + 5) + ' y=' + (Ya(0.875) + 3).toFixed(1) +
+    ' fill="#5a6070" font-size=9>85-90c</text>');
+  // right axis ticks for the ask
+  [0, 0.25, 0.5, 0.75, 1].forEach(function (v) {
+    svg.push('<line x1=' + PL + ' y1=' + Ya(v).toFixed(1) + ' x2=' + (W - PR) + ' y2=' + Ya(v).toFixed(1) +
+      ' stroke="#1e222b" stroke-width=1 />');
+    svg.push('<text x=' + (W - PR + 5) + ' y=' + (Ya(v) + 3).toFixed(1) + ' fill="#5a6070" font-size=9>' +
+      Math.round(v * 100) + 'c</text>');
+  });
+  // left axis ticks for the price
+  [0, 0.5, 1].forEach(function (f) {
+    var v = lo + f * (hi - lo);
+    svg.push('<text x=' + (PL - 6) + ' y=' + (Y1(v) + 3).toFixed(1) +
+      ' fill="#5a6070" font-size=9 text-anchor=end>' + niceNum(v, v > 100 ? 0 : 4) + '</text>');
+  });
+  // the strike, per window, as flat segments — it is a step function, so it must not be interpolated
+  segs(pts, function (p) { return p.strike; }, X, Y1).forEach(function (d2) {
+    svg.push('<polyline points="' + d2 + '" fill=none stroke="#8b91a1" stroke-width=1 ' +
+      'stroke-dasharray="3 3" vector-effect=non-scaling-stroke />');
+  });
+  // the favourite ask: the side the book prices dear, which is the side the gate tests
+  segs(pts, function (p) {
+    var a = [p.yesAsk, p.noAsk].filter(function (x) { return x !== null && isFinite(x) && x > 0 && x < 1; });
+    return a.length ? Math.max.apply(null, a) : null;
+  }, X, Ya).forEach(function (d2) {
+    svg.push('<polyline points="' + d2 + '" fill=none stroke="#ffc857" stroke-width=1.4 ' +
+      'vector-effect=non-scaling-stroke />');
+  });
+  // spot last, so it draws over the rest
+  segs(pts, function (p) { return p.spot; }, X, Y1).forEach(function (d2) {
+    svg.push('<polyline points="' + d2 + '" fill=none stroke="#7aa2ff" stroke-width=1.6 ' +
+      'vector-effect=non-scaling-stroke />');
+  });
+  // eligibility ticks: the passes where the clock alone allowed a trade
+  var cl = d.clock || { minLeft: 6, maxLeft: 12 };
+  pts.forEach(function (p) {
+    if (p.minutesLeft === null || !isFinite(p.minutesLeft)) return;
+    if (p.minutesLeft < cl.minLeft || p.minutesLeft > cl.maxLeft) return;
+    svg.push('<line x1=' + X(p.at).toFixed(1) + ' y1=' + (H1 - 5) + ' x2=' + X(p.at).toFixed(1) +
+      ' y2=' + (H1 - 1) + ' stroke="#3ddc84" stroke-width=1 opacity=.5 />');
+  });
+
+  // ── entry marks ──
+  var mine = [];
+  if (tr && tr.trades) {
+    mine = tr.trades.filter(function (t) {
+      return t.sym === d.sym && t.at && new Date(t.at).getTime() >= t0 && new Date(t.at).getTime() <= t1;
+    });
+    mine.forEach(function (t) {
+      var at = new Date(t.at).getTime();
+      var col = t.outcome === 'OPEN' ? '#7aa2ff' : (Number(t.pnl) > 0 ? '#3ddc84' : '#ff6b6b');
+      var up = String(t.direction || '').toUpperCase().indexOf('UP') >= 0 ||
+        String(t.direction || '').toUpperCase().indexOf('YES') >= 0;
+      var yy = (t.spot !== null && isFinite(t.spot)) ? Y1(t.spot) : Ya(Number(t.priceCents) / 100);
+      var x = X(at);
+      svg.push('<path d="M' + x.toFixed(1) + ' ' + (yy + (up ? -9 : 9)).toFixed(1) +
+        ' L' + (x - 5).toFixed(1) + ' ' + (yy + (up ? -1 : 1)).toFixed(1) +
+        ' L' + (x + 5).toFixed(1) + ' ' + (yy + (up ? -1 : 1)).toFixed(1) + ' Z" fill="' + col + '"/>');
+      if (t.exitAt) {
+        var xa = X(new Date(t.exitAt).getTime());
+        svg.push('<line x1=' + xa.toFixed(1) + ' y1=12 x2=' + xa.toFixed(1) + ' y2=' + (H1 - 12) +
+          ' stroke="' + col + '" stroke-width=1 stroke-dasharray="2 4" opacity=.55 />');
+      }
+    });
+  }
+  svg.push('</svg>');
+
+  // ── RSI and gap strips ──
+  function strip(h, pick, dom, guides, colour, label) {
+    var g = [];
+    g.push('<svg viewBox="0 0 ' + W + ' ' + h + '" preserveAspectRatio="none">');
+    var Y = function (v) { return 10 + (1 - (v - dom[0]) / (dom[1] - dom[0])) * (h - 20); };
+    guides.forEach(function (v) {
+      g.push('<line x1=' + PL + ' y1=' + Y(v).toFixed(1) + ' x2=' + (W - PR) + ' y2=' + Y(v).toFixed(1) +
+        ' stroke="#1e222b" stroke-width=1 />');
+      g.push('<text x=' + (PL - 6) + ' y=' + (Y(v) + 3).toFixed(1) +
+        ' fill="#5a6070" font-size=9 text-anchor=end>' + v + '</text>');
+    });
+    segs(pts, pick, X, Y).forEach(function (d2) {
+      g.push('<polyline points="' + d2 + '" fill=none stroke="' + colour + '" stroke-width=1.3 ' +
+        'vector-effect=non-scaling-stroke />');
+    });
+    g.push('<text x=' + (PL + 4) + ' y=11 fill="#5a6070" font-size=9>' + label + '</text>');
+    g.push('</svg>');
+    return g.join('');
+  }
+  var gaps = pts.map(function (p) { return isFinite(p.gapBps) && p.gapBps !== null ? Math.abs(p.gapBps) : null; })
+    .filter(function (v) { return v !== null; });
+  var gmax = gaps.length ? Math.max(10, Math.ceil(Math.max.apply(null, gaps) / 10) * 10) : 10;
+
+  var when = function (ms) { return new Date(ms).toLocaleTimeString(); };
+  body.innerHTML =
+    '<div class=chartwrap>' + svg.join('') +
+    '<div class=legend>' +
+      '<span><i style="background:#7aa2ff"></i>spot (left axis)</span>' +
+      '<span><i style="background:#ffc857"></i>favourite ask (right axis)</span>' +
+      '<span><i style="background:#8b91a1"></i>strike</span>' +
+      '<span><i class=sq style="background:#3ddc84"></i>win</span>' +
+      '<span><i class=sq style="background:#ff6b6b"></i>loss</span>' +
+      '<span><i class=sq style="background:#7aa2ff"></i>open</span>' +
+      '<span>green ticks: clock allowed a trade</span>' +
+    '</div>' +
+    '<div class=readout id=chread>' + esc(d.sym) + ' · ' + pts.length + ' passes · ' +
+      when(t0) + ' → ' + when(t1) + ' · hover for the numbers</div>' +
+    '</div>' +
+    '<div class=chartwrap>' + strip(H2, function (p) { return p.rsi; }, [0, 100], [30, 50, 70], '#8b91a1', 'RSI (observed)') + '</div>' +
+    '<div class=chartwrap>' + strip(H3, function (p) {
+      return isFinite(p.gapBps) && p.gapBps !== null ? Math.abs(p.gapBps) : null;
+    }, [0, gmax], [0, Math.round(gmax / 2), gmax], '#8b91a1', 'distance to strike, bp (observed)') + '</div>' +
+    tradesForCoin(mine, tr, d.sym);
+
+  chartGeom = { t0: t0, t1: t1, PL: PL, PR: PR, W: W };
+}
+
+// The per-coin fill list. Gated: /api/trades answers 401 without the token, and 'tr.locked' is how 'get()'
+// reports that, so the chart still draws and only the marks and this table are withheld.
+function tradesForCoin(mine, tr, sym) {
+  if (tr && tr.locked) {
+    return '<div class=note style="margin-top:14px">' +
+      '<b>Buy and sell marks are private.</b> A fill belongs to an account, so it needs ' +
+      '<code>?key=YOUR_TOKEN</code>. The series above names nobody and stays open.</div>';
+  }
+  if (!mine || !mine.length) {
+    return '<div class=empty>no ' + esc(sym) + ' fills inside this window</div>';
+  }
+  var rows = mine.slice().sort(function (a, b) { return new Date(b.at) - new Date(a.at); }).map(function (t) {
+    var cls = t.outcome === 'OPEN' ? 'open' : (Number(t.pnl) > 0 ? 'win' : 'loss');
+    return '<tr><td class=num>' + new Date(t.at).toLocaleTimeString() + '</td>' +
+      '<td>' + esc(String(t.direction || '')) + ' <span class="pill ' + (t.live ? 'live' : 'paper') + '">' +
+      (t.live ? 'live' : 'paper') + '</span></td>' +
+      '<td class=num>' + t.contracts + ' @ ' + t.priceCents + 'c</td>' +
+      '<td class=num>' + (t.exitCents === null ? '—' : t.exitCents + 'c') + '</td>' +
+      '<td class=num>' + (t.pnl === null ? '—' : (Number(t.pnl) >= 0 ? '+' : '') + niceNum(t.pnl)) + '</td>' +
+      '<td><span class="pill ' + cls + '">' + esc(String(t.outcome || '')) + '</span></td>' +
+      '<td class=num>' + niceNum(t.rsi, 1) + '</td>' +
+      '<td class=num>' + niceNum(t.gapBps, 1) + '</td></tr>';
+  }).join('');
+  return '<table style="margin-top:16px"><thead><tr><th>entry</th><th>side</th><th>size</th>' +
+    '<th>exit</th><th>p&l</th><th>outcome</th><th>rsi</th><th>gap bp</th></tr></thead><tbody>' +
+    rows + '</tbody></table>';
+}
+
+// One listener for the life of the page rather than one per render: re-binding on every 5-second refresh
+// is how a page ends up with two hundred handlers and a crosshair that fires each of them.
+document.addEventListener('mousemove', function (e) {
+  var svgEl = document.getElementById('chsvg');
+  if (!svgEl || !chartGeom || !chartPts.length) return;
+  var r = svgEl.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top - 4 || e.clientY > r.bottom + 4) return;
+  var frac = (e.clientX - r.left) / r.width;
+  var xVb = frac * chartGeom.W;
+  var g = chartGeom, inner = g.W - g.PL - g.PR;
+  var t = g.t0 + Math.max(0, Math.min(1, (xVb - g.PL) / inner)) * (g.t1 - g.t0);
+  var best = null, bd = Infinity;
+  for (var i = 0; i < chartPts.length; i++) {
+    var dd = Math.abs(chartPts[i].at - t);
+    if (dd < bd) { bd = dd; best = chartPts[i]; }
+  }
+  var out = document.getElementById('chread');
+  if (!best || !out) return;
+  var asks = [best.yesAsk, best.noAsk].filter(function (x) { return x !== null && isFinite(x); });
+  out.textContent = new Date(best.at).toLocaleTimeString() +
+    '  spot ' + niceNum(best.spot, best.spot > 100 ? 1 : 4) +
+    '  strike ' + niceNum(best.strike, best.strike > 100 ? 1 : 4) +
+    '  fav ask ' + (asks.length ? Math.round(Math.max.apply(null, asks) * 100) + 'c' : '—') +
+    '  T-' + niceNum(best.minutesLeft, 1) + 'm' +
+    '  rsi ' + niceNum(best.rsi, 1) +
+    '  gap ' + niceNum(best.gapBps, 1) + 'bp' +
+    '  drift ' + niceNum(best.drift10Bps, 1) + 'bp' +
+    '  vol ' + niceNum(best.realizedVolBps, 1) + 'bp' +
+    '  ' + (best.taken ? 'TAKEN' : (best.reason || 'skip'));
+});
+
+$('coinbar').addEventListener('click', function (e) {
+  var b = e.target.closest('button[data-c]');
+  if (!b) return;
+  chartSym = b.dataset.c;
+  refresh();
+});
+
 function lockedBox(what) {
   return '<div class=locked><b>' + esc(what) + ', so this tab is private.</b><br><br>' +
     'Set <code>WEB_TOKEN</code> on the service and open this page with <code>?key=YOUR_TOKEN</code>. ' +
@@ -535,7 +825,12 @@ function lockedBox(what) {
 
 async function get(path) {
   try {
-    const r = await fetch(path + q);
+    // q is the ?key= for the gated routes. It is JOINED with the correct separator rather than
+    // concatenated: the chart passes ?sym=, and a plain concatenation produced '?sym=BTC?key=...', which
+    // the server read as a market named 'BTC?key=...' and answered 'no such market'. Caught in a browser,
+    // not by a unit test, because both halves were individually correct.
+    const sep = (q && path.indexOf('?') >= 0) ? '&' + q.slice(1) : q;
+    const r = await fetch(path + sep);
     if (r.status === 401) return { locked: true };
     if (!r.ok) return null;
     return await r.json();
@@ -559,6 +854,14 @@ async function refresh() {
   }
   if (tab === 'decisions') { const d = await get('/api/decisions'); if (d && pub) renderDecisions(d, pub); }
   if (tab === 'coins')     { if (pub) renderCoins(pub); }
+  if (tab === 'chart') {
+    const [ser, tr] = await Promise.all([get('/api/series?sym=' + chartSym), get('/api/trades')]);
+    if (ser) renderChart(ser, tr, pub);
+    if (ser && ser.counts) {
+      const tot = Object.keys(ser.counts).reduce((a, k) => a + ser.counts[k], 0);
+      $('cchr').textContent = tot ? String(tot) : '';
+    }
+  }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
   if (tab === 'hours')     { const d = await get('/api/hours');     if (d) renderHours(d); }
   if (tab === 'gates')     { const d = await get('/api/gates');     if (d) renderGates(d); }

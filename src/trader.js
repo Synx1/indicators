@@ -33,6 +33,7 @@
 
 const decide = require('./decide');
 const favourite = require('./favourite');
+const series = require('./series');
 const gl = require('./markets');
 const users = require('./users');
 const book = require('./book');
@@ -477,7 +478,16 @@ async function favouriteFor(coin, market, strike, s, candles) {
     minLeft: clock.minLeft,
     maxLeft: clock.maxLeft
   });
-  if (r.skip) return { skip: r.skip, why: r.why };
+  // The quote the gate DECIDED on, carried out on both paths so the chart plots the same number the
+  // decision was made against. Re-reading the book for the chart would draw a price that no decision ever
+  // saw, which is the kind of near-miss that took two August paper misses to explain.
+  const obs = {
+    yesAsk: parseFloat(quoted.yes_ask_dollars || 0),
+    yesBid: parseFloat(quoted.yes_bid_dollars || 0),
+    noAsk: parseFloat(quoted.no_ask_dollars || 0),
+    minutesLeft: ml
+  };
+  if (r.skip) return { skip: r.skip, why: r.why, obs };
 
   // The indicators and the spot are reported, never gated on. They are already in hand, they make the DM
   // and the site legible, and keeping them out of the decision is the point: the measured edge was taken
@@ -580,6 +590,28 @@ async function decideFor(coin) {
   // the number came from.
   if (wantFav) {
     const fav = await favouriteFor(coin, market, strike, s, candles);
+    // ── the chart's observation, recorded AFTER the gate has decided ──
+    //
+    // One way, always. src/series.js may never be read by a decision: the whole reason this gate reads
+    // the book and not the candles is that a stale candle in a decision once cost 85% of the bankroll.
+    // Wrapped because a chart that breaks the trader is worse than no chart, and `record()` additionally
+    // swallows its own failures.
+    try {
+      const d = (candles && candles.length && s) ? marketDiagnostics(candles, s.price, strike) : {};
+      series.record({
+        sym: coin.sym, at: Date.now(), strike,
+        spot: s ? s.price : null,
+        yesAsk: fav && fav.obs ? fav.obs.yesAsk : null,
+        yesBid: fav && fav.obs ? fav.obs.yesBid : null,
+        noAsk: fav && fav.obs ? fav.obs.noAsk : null,
+        minutesLeft: fav && fav.obs ? fav.obs.minutesLeft : null,
+        rsi: (candles && candles.length) ? decide.calcRSI(candles) : null,
+        gapBps: d.gapBps, drift10Bps: d.drift10Bps,
+        realizedVolBps: d.realizedVolBps, volumeRatio: d.volumeRatio,
+        taken: Boolean(fav && !fav.skip),
+        reason: fav && fav.skip ? fav.skip : null
+      });
+    } catch (_) { /* observation is never allowed to change a decision */ }
     // A hit is the decision. A miss is only the final answer when the model gate is not also running —
     // under 'both' the round falls through and gets its second look.
     if (fav && !fav.skip) return fav;

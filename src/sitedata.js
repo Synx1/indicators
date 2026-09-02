@@ -25,6 +25,7 @@ const users = require('./users');
 const book = require('./book');
 const gl = require('./markets');
 const presets = require('./presets');
+const series = require('./series');
 const activity = require('./activity');
 const {
   WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE
@@ -318,6 +319,32 @@ function accounts() {
 }
 
 /** Every position across every account, newest first. Token-gated: it names people. */
+/**
+ * One market's observed series, for the chart.
+ *
+ * Open, like /api/decisions: every field is a market fact or the bot's own verdict — a price, a strike, a
+ * quote, an indicator, a skip reason. Nothing here names a person or their money, so there is nothing to
+ * redact. The buy/sell MARKS are a different question and stay on /api/trades behind the token, because a
+ * fill is somebody's position.
+ *
+ * `spot` is the price line rather than a fresh Coinbase pull: it is the price the bot actually saw on that
+ * pass. A chart drawn from a second, later fetch would show a price no decision was ever made against.
+ */
+function seriesFor(sym, limit) {
+  const known = gl.SYMS.includes(sym);
+  return {
+    asOf: Date.now(),
+    sym: known ? sym : null,
+    ok: known,
+    why: known ? null : `no such market: ${sym}`,
+    on: known ? gl.isEnabled(sym) : null,
+    preset: gl.preset,
+    clock: gl.activeClock(),
+    counts: series.counts(),
+    points: known ? series.forSym(sym, Number(limit) || series.MAX_POINTS) : []
+  };
+}
+
 function trades(limit = 300) {
   const out = [];
   for (const t of users.all()) {
@@ -511,4 +538,5 @@ function gates() {
   };
 }
 
-module.exports = { publicState, decisions, accounts, trades, hours, recommendations, gates, NAME, WEB_TOKEN };
+module.exports = {
+  seriesFor, publicState, decisions, accounts, trades, hours, recommendations, gates, NAME, WEB_TOKEN };

@@ -62,6 +62,15 @@ function start(opts = {}) {
       if (path === '/api/state') return json(res, 200, data.publicState());
       if (path === '/api/decisions') return json(res, 200, data.decisions(250, { redact: !authed(req) }));
 
+      // Open for the same reason as /api/decisions: a price, a strike, a quote, an indicator and the
+      // bot's own verdict are market facts. The buy/sell marks drawn on top of this come from
+      // /api/trades, which stays gated, so an unauthenticated chart has no fills on it.
+      if (path === '/api/series') {
+        let sym = '';
+        try { sym = new URL(req.url, 'http://x').searchParams.get('sym') || ''; } catch (_) { sym = ''; }
+        return json(res, 200, data.seriesFor(String(sym).toUpperCase(), 720));
+      }
+
       // Private: anything naming a person or their money. Closed by default when no token is
       // configured, because the safe answer to "is this secret" is yes.
       if (path === '/api/trades') {
