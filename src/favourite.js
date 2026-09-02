@@ -80,14 +80,20 @@ const breakEven = p => p + feePt(p);
  * measured YES/NO split came out 954/983 — which is what an edge that is about price rather than direction
  * has to look like.
  */
-function evaluate({ yesAsk, noAsk, yesBid, minutesLeft }) {
+function evaluate({ yesAsk, noAsk, yesBid, minutesLeft, minLeft, maxLeft }) {
+  // The clock comes from the fleet preset (src/presets.js) and falls back to the constants above, so a
+  // caller that does not know about presets still gets the band the module was measured on. Passing the
+  // window in rather than reading it here keeps this file free of the config it is gated by — the gate
+  // stays a pure function of a quote and a clock, which is what makes favourite.test.js cheap.
+  const lo = Number.isFinite(Number(minLeft)) ? Number(minLeft) : FAV_MIN_LEFT;
+  const hi = Number.isFinite(Number(maxLeft)) ? Number(maxLeft) : FAV_MAX_LEFT;
   const ml = Number(minutesLeft);
   if (!Number.isFinite(ml)) return { skip: 'fav-no-clock', why: 'no close time on the market' };
-  if (ml > FAV_MAX_LEFT) {
-    return { skip: 'fav-too-early', why: `${ml.toFixed(1)}m left is over the ${FAV_MAX_LEFT}m ceiling` };
+  if (ml > hi) {
+    return { skip: 'fav-too-early', why: `${ml.toFixed(1)}m left is over the ${hi}m ceiling` };
   }
-  if (ml < FAV_MIN_LEFT) {
-    return { skip: 'fav-too-late', why: `${ml.toFixed(1)}m left is under the ${FAV_MIN_LEFT}m floor` };
+  if (ml < lo) {
+    return { skip: 'fav-too-late', why: `${ml.toFixed(1)}m left is under the ${lo}m floor` };
   }
 
   // A missing quote arrives as 0 or 1, and both are finite numbers that sail through a range check.

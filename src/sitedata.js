@@ -24,6 +24,7 @@ const http = require('http');
 const users = require('./users');
 const book = require('./book');
 const gl = require('./markets');
+const presets = require('./presets');
 const activity = require('./activity');
 const {
   WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE
@@ -178,6 +179,18 @@ function publicState() {
       lastError: trader ? trader.lastError : null
     },
     markets: gl.SYMS.map(sym => ({ sym, on: gl.isEnabled(sym) })),
+    // Fleet configuration, not anybody's data — the same class of fact as `markets` and `killed`, so it
+    // sits outside the authed block. It is also the thing that explains a quiet scanner: a page showing
+    // Passive with a T-12..T-7 clock answers "why no trades" without anybody opening Discord.
+    preset: {
+      name: gl.preset,
+      label: gl.preset === presets.CUSTOM ? 'Custom' : presets.get(gl.preset).label,
+      summary: presets.summary(gl.preset),
+      clock: gl.activeClock(),
+      maxOpen: gl.maxOpenCap(),
+      measured: gl.preset === presets.CUSTOM ? null : presets.get(gl.preset).measured,
+      corpus: presets.CORPUS
+    },
     killed: gl.isKilled(),
     fleet: {
       accounts: all.length, closed, wins, losses: closed - wins,

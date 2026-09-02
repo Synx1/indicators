@@ -33,6 +33,7 @@ const settings = require('./settings');
 const users = require('./users');
 const book = require('./book');
 const gl = require('./markets');
+const presets = require('./presets');
 const auth = require('./kalshiauth');
 const kt = require('./kalshitrade');
 const advice = require('./advice');
@@ -863,7 +864,10 @@ function adminPayload() {
       ['Live', `${signed(fleetLive)}   real money`],
       ['Paper', signed(fleetPaper)],
       ['At risk now', `${money(fleetRisk)}   live only`],
-      ['Markets on', `${gl.enabledSyms().length}/${gl.SYMS.length}`]
+      ['Markets on', `${gl.enabledSyms().length}/${gl.SYMS.length}`],
+      ['Preset', presets.summary(gl.preset)],
+      ['Clock', `T-${gl.activeClock().maxLeft}..T-${gl.activeClock().minLeft} left` +
+        `   ceiling ${gl.maxOpenCap()} open`]
     ]),
     inline: false
   });
@@ -942,6 +946,9 @@ function adminComponents() {
     new ButtonBuilder().setCustomId(`${ID}:kill`)
       .setLabel(gl.isKilled() ? 'Lift kill switch' : 'KILL SWITCH')
       .setStyle(gl.isKilled() ? ButtonStyle.Success : ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`${ID}:pre`)
+      .setLabel(`Preset: ${gl.preset === presets.CUSTOM ? 'Custom' : presets.get(gl.preset).label}`)
+      .setStyle(gl.preset === presets.CUSTOM ? ButtonStyle.Secondary : ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`${ID}:admin`).setLabel('Refresh').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${ID}:home`).setLabel('◀ Back').setStyle(ButtonStyle.Primary)
   ));

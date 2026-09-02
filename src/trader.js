@@ -370,7 +370,8 @@ async function findActive(series, lo = MIN_MINUTES, hi = MAX_MINUTES) {
   const { data } = await axios.get(url, { timeout: 15000 });
   const now = Date.now();
   // The bounds are arguments because the two gates want different clocks. The model gate wants 8-14
-  // minutes, where its spot-vs-strike read has room to be meaningful. The favourite gate wants 6-12,
+  // minutes, where its spot-vs-strike read has room to be meaningful. The favourite gate wants the
+  // window the fleet preset names (6-12 under Aggro, 7-12 under the other two),
   // where the measured edge lives — its cells turn negative by T-3. Hard-coding one window would have
   // silently traded the other gate outside the range it was measured in.
   return (data.markets || []).find(m => {
@@ -464,11 +465,17 @@ async function favouriteFor(coin, market, strike, s, candles) {
   const ml = (new Date(market.close_time).getTime() - Date.now()) / 60000;
   const fresh = await getMarket(market.ticker);
   const quoted = fresh || market;
+  // The clock is the fleet preset's, not the module default: passive and neutral stop at T-7 because
+  // T-6 loses money in both chronological halves of the corpus, and aggro is the only tier that reaches
+  // down to it. See src/presets.js.
+  const clock = gl.activeClock();
   const r = favourite.evaluate({
     yesAsk: parseFloat(quoted.yes_ask_dollars || 0),
     noAsk: parseFloat(quoted.no_ask_dollars || 0),
     yesBid: parseFloat(quoted.yes_bid_dollars || 0),
-    minutesLeft: ml
+    minutesLeft: ml,
+    minLeft: clock.minLeft,
+    maxLeft: clock.maxLeft
   });
   if (r.skip) return { skip: r.skip, why: r.why };
 
@@ -524,8 +531,12 @@ async function decideFor(coin) {
   // quietly handing the favourite gate a 13-minute market it has no measurement for.
   const wantFav = STRATEGY === 'favourite' || STRATEGY === 'both';
   const wantModel = STRATEGY === 'model' || STRATEGY === 'both';
-  const loMin = wantFav ? Math.min(favourite.FAV_MIN_LEFT, wantModel ? MIN_MINUTES : 99) : MIN_MINUTES;
-  const hiMin = wantFav ? Math.max(favourite.FAV_MAX_LEFT, wantModel ? MAX_MINUTES : 0) : MAX_MINUTES;
+  // The favourite half of the union is the PRESET's window, so tightening the preset also narrows what
+  // findActive fetches. Reading the module constants here instead would keep pulling T-6 rounds under
+  // Passive and then refuse every one of them inside the gate — the same work for a guaranteed skip.
+  const fc = gl.activeClock();
+  const loMin = wantFav ? Math.min(fc.minLeft, wantModel ? MIN_MINUTES : 99) : MIN_MINUTES;
+  const hiMin = wantFav ? Math.max(fc.maxLeft, wantModel ? MAX_MINUTES : 0) : MAX_MINUTES;
 
   // ── a dead price feed must not silence the book ──
   //
@@ -551,9 +562,9 @@ async function decideFor(coin) {
     return { skip: 'error', why: e.message };
   }
 
-  // The bounds, not the model gate's constants. Under STRATEGY=favourite the search window is 6-12
-  // minutes, and a message reading "between 8 and 14" would send anybody reading the pass log looking for
-  // a bug in the wrong gate.
+  // The bounds, not the model gate's constants. Under STRATEGY=favourite the search window is the fleet
+  // preset's — 7-12 minutes on Passive and Neutral, 6-12 on Aggro — and a message reading "between 8 and
+  // 14" would send anybody reading the pass log looking for a bug in the wrong gate.
   if (!market) return { skip: 'no-window', why: `no round between ${loMin} and ${hiMin} minutes out` };
 
   const strike = parseFloat(market.floor_strike);
@@ -839,9 +850,16 @@ function accountBlock(t, d) {
   // account is out of money mid-round and Kalshi starts refusing orders. bot.js had it as
   // MAX_POS = 3 and it was not ported with the rest — this closes that gap.
   const openN = mine.length;
-  const maxOpen = Number(t.get('maxOpen')) || 3;
+  // The user's own limit, bounded by the fleet preset's ceiling. A CEILING and not an assignment: a user
+  // who chose 2 keeps 2 under Aggro's 6, because a fleet policy may tighten somebody's risk and must not
+  // be able to widen it. Whichever bound bites is named in the refusal, so the pass log says which knob
+  // to move.
+  const mineMax = Number(t.get('maxOpen')) || 3;
+  const fleetCap = gl.maxOpenCap();
+  const maxOpen = Math.min(mineMax, fleetCap);
   if (openN >= maxOpen) {
-    return `${openN} positions already open, at the ${maxOpen} limit`;
+    const which = fleetCap < mineMax ? ` (${gl.preset} preset ceiling)` : '';
+    return `${openN} positions already open, at the ${maxOpen} limit${which}`;
   }
 
   // Directional-concentration cap (opt-in, blank = no cap). The same-window rule above refuses two

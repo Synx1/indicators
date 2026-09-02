@@ -20,6 +20,7 @@ const settings = require('./src/settings');
 const auth = require('./src/kalshiauth');
 const kt = require('./src/kalshitrade');
 const gl = require('./src/markets');
+const presets = require('./src/presets');
 const shadow = require('./src/shadow');
 const depth = require('./src/depth');
 const panel = require('./src/panel');
@@ -365,7 +366,7 @@ async function dispatch(interaction) {
   //
   // One gate for every fleet-wide control, so a control added later is owner-only by default
   // instead of by somebody remembering to add the check.
-  const OWNER_IDS = [`${panel.ID}:admin`, `${panel.ID}:kill`];
+  const OWNER_IDS = [`${panel.ID}:admin`, `${panel.ID}:kill`, `${panel.ID}:pre`];
   const isOwnerControl = OWNER_IDS.includes(id) || id.startsWith(`${panel.ID}:mkt:`) ||
     id.startsWith(`${panel.ID}:ok:`) || id.startsWith(`${panel.ID}:no:`);
   if (isOwnerControl && !t.isOwner) {
@@ -388,6 +389,30 @@ async function dispatch(interaction) {
     return interaction.followUp({
       content: `${sym} is now **${r.enabled ? 'ON' : 'OFF'}** for everybody.` +
         (r.enabled ? '' : ' Positions already open on it are still managed and settled.'),
+      flags: MessageFlags.Ephemeral
+    });
+  }
+  if (id === `${panel.ID}:pre`) {
+    // Cycles passive -> neutral -> aggro. It rewrites which markets are on, the favourite gate's clock
+    // and the fleet ceiling on open positions together, because those three are what the measured row in
+    // src/presets.js was measured over — applying two of the three would claim a number for a
+    // configuration nobody tested.
+    const to = presets.next(gl.preset);
+    const r = gl.setPreset(to, t.userId);
+    await ackUpdate(interaction);
+    await interaction.editReply(panel.adminPayload());
+    if (!r.ok) {
+      return interaction.followUp({ content: `Could not switch preset: ${r.why}`, flags: MessageFlags.Ephemeral });
+    }
+    const p = presets.get(r.preset);
+    return interaction.followUp({
+      content: `Preset is now **${p.label}** for everybody.\n${p.blurb}\n`
+        + `Markets: ${p.coins.join(' ')}   ·   clock T-${p.maxLeft}..T-${p.minLeft}`
+        + `   ·   at most ${p.maxOpen} open\n`
+        + `Measured ${p.measured.win}% win, ${p.measured.edge >= 0 ? '+' : ''}${p.measured.edge.toFixed(2)}pp `
+        + `over break-even on ${p.measured.n.toLocaleString('en-US')} trades `
+        + `(${presets.CORPUS.markets.toLocaleString('en-US')} markets, ${presets.CORPUS.from} to ${presets.CORPUS.to}).\n`
+        + `_Anyone's own "max positions" setting still applies underneath the ceiling._`,
       flags: MessageFlags.Ephemeral
     });
   }

@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR } = require('./config');
+const presets = require('./presets');
 
 const FILE = path.join(DATA_DIR, 'globals.json');
 
@@ -38,11 +39,31 @@ let dirty = false;
 let timer = null;
 let log = () => {};
 
+/** A minutes-left bound, or the fallback. Outside 1-14 there is no 15-minute round left to trade. */
+function clockBound(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 && n <= 14 ? Math.round(n) : fallback;
+}
+
 function blank() {
+  const p = presets.get(presets.DEFAULT);
   return {
-    // Every market on by default. An operator turning one off is a deliberate act; a market
-    // silently absent because a config file was empty is not.
-    disabled: [],
+    // The fleet-wide risk preset. Fleet-wide because it is the same KIND of fact as the kill switch — a
+    // policy somebody decided for everybody, not a per-user taste. See src/presets.js for the measured
+    // row behind each name.
+    preset: presets.DEFAULT,
+    presetBy: null,
+    // Derived from the preset on a fresh install, owned by whatever last wrote them after that. An
+    // operator turning a market off is a deliberate act; a market silently absent because a config file
+    // was empty is not.
+    disabled: SYMS.filter(s => !p.coins.includes(s)),
+    // The favourite gate's clock window, in minutes left. T-6 loses money in both chronological halves of
+    // the corpus, so only aggro reaches down to it.
+    minLeft: p.minLeft,
+    maxLeft: p.maxLeft,
+    // A CEILING on each user's own maxOpen, never an assignment. A fleet policy may tighten risk; it must
+    // not be able to force somebody to carry more positions than they chose.
+    maxOpen: p.maxOpen,
     // Kill switch. When true nothing opens, for anybody.
     killed: false,
     killedAt: null,
@@ -59,6 +80,20 @@ function read() {
     // Only known symbols survive a load, so a renamed or retired market cannot linger as a
     // permanent disable nobody can find in the UI.
     b.disabled = Array.isArray(b.disabled) ? b.disabled.filter(s => SYMS.includes(s)) : [];
+    // An unreadable clock bound must not become 0 and silently refuse every market. It falls back to the
+    // default preset's, which is a configuration that has a measured row behind it.
+    const d = presets.get(presets.DEFAULT);
+    b.minLeft = clockBound(b.minLeft, d.minLeft);
+    b.maxLeft = clockBound(b.maxLeft, d.maxLeft);
+    if (b.minLeft > b.maxLeft) { b.minLeft = d.minLeft; b.maxLeft = d.maxLeft; }
+    const mo = Number(b.maxOpen);
+    b.maxOpen = Number.isFinite(mo) && mo >= 1 ? Math.min(Math.round(mo), 20) : d.maxOpen;
+    // The stored NAME is only a label for the stored VALUES, so it is re-derived rather than trusted. A
+    // file hand-edited to say 'passive' while listing seven coins reads as custom, because it is.
+    b.preset = presets.match({
+      coins: SYMS.filter(s => !b.disabled.includes(s)),
+      minLeft: b.minLeft, maxLeft: b.maxLeft, maxOpen: b.maxOpen
+    });
     return b;
   } catch (e) {
     log(`  !! globals.json unreadable (${e.message}) — starting from defaults`);
@@ -106,6 +141,8 @@ function init(opts = {}) {
     log(`  !! KILL SWITCH IS ON (set ${state.killedAt || 'unknown'}) — nothing will open`);
   }
   if (state.disabled.length) log(`  markets off: ${state.disabled.join(', ')}`);
+  log(`  preset: ${presets.summary(state.preset)}`);
+  log(`  clock: T-${state.maxLeft}..T-${state.minLeft}   fleet ceiling: ${state.maxOpen} open`);
   return state;
 }
 
@@ -126,8 +163,60 @@ function toggleMarket(sym) {
   if (!SYMS.includes(sym)) return { ok: false, why: `no such market: ${sym}` };
   const i = state.disabled.indexOf(sym);
   if (i >= 0) state.disabled.splice(i, 1); else state.disabled.push(sym);
+  // A hand-toggled coin means the preset label may no longer describe the configuration. Re-derived
+  // rather than forced to 'custom', so toggling a coin off and back on returns the name it had.
+  reprice();
   save();
-  return { ok: true, enabled: isEnabled(sym) };
+  return { ok: true, enabled: isEnabled(sym), preset: state.preset };
+}
+
+/** The favourite gate's clock window. The gate is measured inside it and must not trade outside it. */
+const activeClock = () => ({
+  minLeft: state ? state.minLeft : presets.get(presets.DEFAULT).minLeft,
+  maxLeft: state ? state.maxLeft : presets.get(presets.DEFAULT).maxLeft
+});
+
+/** The fleet ceiling on concurrent positions. Each user's own maxOpen still applies underneath it. */
+const maxOpenCap = () => (state && Number(state.maxOpen)) || presets.get(presets.DEFAULT).maxOpen;
+
+/**
+ * Re-derive the preset name from the values it is supposed to describe.
+ *
+ * The label is never the source of truth. Keeping it derived is what stops a stale name outliving the
+ * configuration it named — the failure mode where a panel reads 'Passive' over seven enabled coins.
+ */
+function reprice() {
+  state.preset = presets.match({
+    coins: enabledSyms(), minLeft: state.minLeft, maxLeft: state.maxLeft, maxOpen: state.maxOpen
+  });
+  return state.preset;
+}
+
+/** Apply a named preset to the whole fleet. */
+function setPreset(name, byUserId = null) {
+  const p = presets.get(name);
+  if (!p) return { ok: false, why: `no such preset: ${name} (${presets.NAMES.join(', ')})` };
+  const was = state.preset;
+  state.disabled = SYMS.filter(s => !p.coins.includes(s));
+  state.minLeft = p.minLeft;
+  state.maxLeft = p.maxLeft;
+  state.maxOpen = p.maxOpen;
+  state.preset = String(name).toLowerCase();
+  state.presetBy = byUserId;
+  save();
+  return { ok: true, changed: was !== state.preset, preset: state.preset, summary: presets.summary(state.preset) };
+}
+
+/** Move the clock by hand. The label follows the values, so this usually reads back as custom. */
+function setClock(minLeft, maxLeft) {
+  const lo = clockBound(minLeft, null), hi = clockBound(maxLeft, null);
+  if (lo == null || hi == null) return { ok: false, why: 'minutes left must be a whole number, 1-14' };
+  if (lo > hi) return { ok: false, why: `floor ${lo}m is above ceiling ${hi}m` };
+  state.minLeft = lo;
+  state.maxLeft = hi;
+  reprice();
+  save();
+  return { ok: true, minLeft: lo, maxLeft: hi, preset: state.preset };
 }
 
 /** Why this market cannot open right now, or null. */
@@ -141,5 +230,7 @@ module.exports = {
   COINS, SYMS, FILE,
   init, save, flush,
   isKilled, isEnabled, enabledSyms, setKilled, toggleMarket, marketBlock,
+  activeClock, maxOpenCap, setPreset, setClock, reprice, clockBound,
+  get preset() { return state ? state.preset : presets.DEFAULT; },
   get state() { return state; }
 };
