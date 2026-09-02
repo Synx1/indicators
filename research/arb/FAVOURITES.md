@@ -99,3 +99,69 @@ same-window pairs agree against 81.6% if independent).
 **The cent tax on a small account.** At one contract the fee rounds up from 0.80¢ to a full cent, which
 costs 0.25 of the 2.54 points. It is why $10 earns 2.48% a trade and $100 earns 2.69% for the identical
 signal.
+
+---
+
+# The band fails on all seven series the bot does not trade
+
+The obvious way to make more money on a small account is more markets. Kalshi runs the identical
+15-minute product on fourteen series, and the bot trades seven. The other seven — GOLD, SILVER, COPPER,
+NATGAS, WTI, NEAR, ZEC, 19,327 settled markets between them — would have roughly doubled the trade count,
+and the five metals and energy ones would have cut the cross-coin correlation that is what actually caps
+the stake.
+
+Tested with the shipped gate, unchanged: 85-90¢, T-12..T-6, hold to settle, same fee, same grading.
+
+| series | median volume | edge | in the bot? |
+|---|---|---|---|
+| BTC | 2,190,179 | **+2.11pp** | yes |
+| GOLD | 199,132 | −4.45pp | no |
+| ETH | 83,031 | **+1.92pp** | yes |
+| WTI | 60,558 | −1.83pp | no |
+| SILVER | 49,320 | −2.53pp | no |
+| XRP | 39,698 | **+0.46pp** | yes |
+| SOL | 36,663 | **+1.46pp** | yes |
+| HYPE | 22,504 | **+1.03pp** | yes |
+| DOGE | 18,482 | **+1.62pp** | yes |
+| BNB | 9,246 | **+2.39pp** | yes |
+| COPPER | 8,623 | −2.17pp | no |
+| ZEC | 8,245 | −13.66pp | no |
+| NEAR | 7,726 | −3.76pp | no |
+| NATGAS | 6,616 | −6.24pp | no |
+
+**Seven for, seven against, and the line falls exactly on which seven the bot already trades.** Pooled
+across all fourteen the band loses 1.62pp.
+
+## It is not liquidity
+
+That was the hypothesis worth having, because it would have been a mechanism and a filter. It does not
+hold. Correlation between log(median volume) and edge across the fourteen is 0.373 — and the two facts
+that break it are plain in the table: GOLD is the second most heavily traded series of all fourteen and
+loses 4.45pp, while BNB is eleventh and earns 2.39pp. Splitting at 20,000 contracts gives the heavily
+traded group a mean edge of −0.23pp, because that group contains GOLD, WTI and SILVER.
+
+It is not "crypto versus commodities" either. NEAR and ZEC are crypto and they are the two worst results
+in the table.
+
+## What this does to the finding
+
+The chronological out-of-sample test held time out. It never held an ASSET out. These seven series are the
+first genuinely independent test the band has faced, and it went 0 for 7.
+
+Both groups look real rather than noisy: the seven coins average +1.57pp over ~900 signals each, which is
+about four sigma as a group, and the other seven average −4.95pp on samples large enough to matter. So this
+is not one lucky half of a distribution centred on zero — it is two opposite effects with no explanation
+for the boundary between them.
+
+**The 7-coin edge stands on its own 68 days of data and on nothing else.** It is statistically sound there —
+6,362 signals, win 89.48% against break-even 87.93%, interval [88.71, 90.21], all four quarters positive,
+both sides symmetric. It also has no stated mechanism and it failed the first test that varied something
+other than the calendar. That combination means: run it in paper, keep the stake small if it goes live, and
+do not scale it on the strength of the backtest.
+
+## And it closes the only route to a bigger number on $50
+
+More series was the one lever that improved the frontier rather than moving along it. It is gone — adding
+those seven would add trades with negative expectancy. What is left on a $50 account is the size dial, and
+the size dial turns against itself: the median session peaks at 12 contracts and falls after, because
+beyond that the account cannot survive its own losing streaks.

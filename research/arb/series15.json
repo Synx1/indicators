@@ -1,0 +1,86 @@
+[
+ {
+  "sym": "BTC",
+  "series": "KXBTC15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "ETH",
+  "series": "KXETH15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "SOL",
+  "series": "KXSOL15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "XRP",
+  "series": "KXXRP15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "BNB",
+  "series": "KXBNB15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "DOGE",
+  "series": "KXDOGE15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "HYPE",
+  "series": "KXHYPE15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "GOLD",
+  "series": "KXGOLD15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "SILVER",
+  "series": "KXSILVER15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "COPPER",
+  "series": "KXCOPPER15M",
+  "open": 1,
+  "settled": 342
+ },
+ {
+  "sym": "NATGAS",
+  "series": "KXNATGAS15M",
+  "open": 1,
+  "settled": 342
+ },
+ {
+  "sym": "WTI",
+  "series": "KXWTI15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "NEAR",
+  "series": "KXNEAR15M",
+  "open": 1,
+  "settled": 1000
+ },
+ {
+  "sym": "ZEC",
+  "series": "KXZEC15M",
+  "open": 1,
+  "settled": 1000
+ }
+]
