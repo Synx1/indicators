@@ -108,6 +108,32 @@ gl.init({ log: () => {} });
 eq(gl.activeClock(), { minLeft: 7, maxLeft: 12 }, 'a junk clock falls back to the default preset window');
 eq(gl.maxOpenCap(), 3, 'a junk ceiling falls back too');
 
+// ── a globals.json written before presets existed ──
+//
+// The bug this pins shipped: merging left seven coins on a Neutral clock, a combination with no measured
+// row, and the panel read 'Custom' one minute after the commit promised Neutral.
+fs.writeFileSync(gl.FILE, JSON.stringify({ disabled: [], killed: false }));
+gl.init({ log: () => {} });
+eq(gl.preset, 'neutral', 'a pre-presets file adopts the default preset, not a half-merge');
+eq(gl.enabledSyms().sort(), presets.get('neutral').coins.slice().sort(), 'and its markets');
+eq(gl.activeClock(), { minLeft: 7, maxLeft: 12 }, 'and its clock');
+eq(gl.maxOpenCap(), 3, 'and its ceiling');
+
+// A coin the owner had deliberately turned off stays off through the migration, even though the default
+// preset would have it on. A deliberate disable outranks a default.
+fs.writeFileSync(gl.FILE, JSON.stringify({ disabled: ['BNB'], killed: false }));
+gl.init({ log: () => {} });
+ok(!gl.isEnabled('BNB'), 'a deliberate disable survives the migration');
+ok(!gl.isEnabled('XRP'), 'and the preset still applies its own exclusion');
+eq(gl.preset, presets.CUSTOM, 'the union is not a preset, so it honestly reads custom');
+
+// Migrating twice must not undo a later change: the second boot sees a `preset` key and leaves it alone.
+gl.setPreset('aggro');
+gl.flush();
+gl.init({ log: () => {} });
+eq(gl.preset, 'aggro', 'a file that already has a preset is not re-migrated');
+ok(gl.isEnabled('XRP'), 'and aggro keeps every market on across a restart');
+
 // ── the gate reads the clock it is given ──
 const q = { yesAsk: 0.87, noAsk: 0.14, yesBid: 0.86 };
 eq(fav.evaluate({ ...q, minutesLeft: 6.5, minLeft: 7, maxLeft: 12 }).skip, 'fav-too-late', 'T-6.5 is refused under a 7m floor');

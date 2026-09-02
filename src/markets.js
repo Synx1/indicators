@@ -80,6 +80,25 @@ function read() {
     // Only known symbols survive a load, so a renamed or retired market cannot linger as a
     // permanent disable nobody can find in the UI.
     b.disabled = Array.isArray(b.disabled) ? b.disabled.filter(s => SYMS.includes(s)) : [];
+    // ── one-time migration for a globals.json written before presets existed ──
+    //
+    // The merge alone produces a configuration nobody measured. `disabled` survives from the old file —
+    // all seven coins on — while the clock and the ceiling take the new defaults, so the live state comes
+    // up as seven coins on a Neutral clock: a combination with no measured row, which is the exact thing
+    // this module exists to prevent. Caught on the 9cbb4c0 deploy, where the panel read 'Custom' one
+    // minute after a commit message promised Neutral.
+    //
+    // Coins the owner deliberately turned off STAY off: the preset's list is unioned with the stored one,
+    // never substituted for it. A deliberate disable outranks a default, and if that union is not any
+    // preset then the label reads custom — which is then true.
+    if (raw && raw.preset === undefined) {
+      const dflt = presets.get(presets.DEFAULT);
+      const off = new Set([...b.disabled, ...SYMS.filter(x => !dflt.coins.includes(x))]);
+      b.disabled = SYMS.filter(x => off.has(x));
+      b.minLeft = dflt.minLeft;
+      b.maxLeft = dflt.maxLeft;
+      b.maxOpen = dflt.maxOpen;
+    }
     // An unreadable clock bound must not become 0 and silently refuse every market. It falls back to the
     // default preset's, which is a configuration that has a measured row behind it.
     const d = presets.get(presets.DEFAULT);
