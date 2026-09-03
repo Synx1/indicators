@@ -834,7 +834,17 @@ function sharesFor(t, d) {
   // it should only ever size down — but `shares` has a default of 30, so that silently capped a
   // $500 account at the same size as a $100 one and the risk dial looked broken. The safety here is
   // riskPerTrade, plus maxOrderCost if one is set; a leftover default is not a safety rail.
-  return Math.floor(budget / MAX_PRICE);
+  //
+  // ── divided by the price being PAID, not by MAX_PRICE ──
+  //
+  // This used to divide by MAX_PRICE, the model gate's 65c ceiling, which was a fair approximation while
+  // 65c was the most a contract could cost. The favourite gate buys at 85-90c, and 0.87/0.65 means auto
+  // size handed out 34% more contracts than the risk dial asked for — the order risked a third more than
+  // intended and still filled, so nothing looked wrong. Dividing by the actual price makes the money at
+  // risk equal `budget` at every price, which is the only reading of riskPerTrade that is true.
+  const px = Number(d && d.price);
+  const at = Number.isFinite(px) && px > 0 && px <= 1 ? px : MAX_PRICE;
+  return Math.floor(budget / at);
 }
 
 // ── applying one decision to every account ──────────────────────
@@ -1007,6 +1017,9 @@ function record(t, d, fill) {
   // Style and the indicator count ride along, so "bought the dip" versus "chased a move" and
   // 3-of-4 versus 4-of-4 are answerable from the record instead of only from a log line.
   p.style = d.style;
+  // Which gate produced this position. Without it the two books are indistinguishable after the fact, and
+  // the whole point of shipping the favourite gate alongside the model one is being able to compare them.
+  p.strategy = d.strategy || 'MODEL';
   p.confirm = d.confirm;
   // RSI rides along because it is the one lever that survived the chronological split: over the corpus,
   // refusing DOWN entries whose RSI was already deeply oversold (17-34) dropped 14 trades that went
