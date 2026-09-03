@@ -109,10 +109,16 @@ function evaluate({ yesAsk, noAsk, yesBid, minutesLeft, minLeft, maxLeft }) {
 
   const hit = sides.find(s => s.price >= FAV_LO && s.price <= FAV_HI);
   if (!hit) {
-    const near = sides.slice().sort((a, b) => Math.abs(a.price - 0.875) - Math.abs(b.price - 0.875))[0];
+    // The DEAR side, not the nearest to the band's middle. What a watcher wants to see is which way this
+    // round is leaning and how far it has to travel, and that is the expensive side — a 64c dear side is
+    // 21c from the band, while its 36c partner is not approaching it at all.
+    const near = sides.slice().sort((a, b) => b.price - a.price)[0];
     return {
       skip: 'fav-off-band',
-      why: `nearest side is ${Math.round(near.price * 100)}c, outside ${FAV_LO * 100}-${FAV_HI * 100}c`
+      why: `nearest side is ${Math.round(near.price * 100)}c, outside ${FAV_LO * 100}-${FAV_HI * 100}c`,
+      // Structured alongside the sentence, so the panel can draw the distance instead of parsing prose.
+      nearest: near.price, nearestSide: near.side,
+      gapToBand: +(FAV_LO - near.price).toFixed(4)
     };
   }
 

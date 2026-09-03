@@ -207,7 +207,10 @@ ok(/<section id=s-coins/.test(html), 'the Coins section exists for it to switch 
 const tabList = html.match(/\[([^\]]*)\]\.forEach\(t =>\s*\$\('s-' \+ t\)/);
 ok(tabList && /'coins'/.test(tabList[1]),
   'the Coins tab is in the switch list — a section absent from it never hides the previous one');
-ok(/Direction now/.test(html) && /DOWN book/.test(html), 'both direction cells are rendered');
+// Matched case-insensitively on purpose: the assertion is that both direction cells exist, not how the
+// label is capitalised. It was pinned to 'DOWN book' and broke when the shouty all-caps label became
+// 'Down book' — a test that fails on a typographic choice is testing the wrong thing.
+ok(/Direction now/i.test(html) && /down book/i.test(html), 'both direction cells are rendered');
 for (const m of html.matchAll(/\$\(['"]([\w-]+)['"]\)/g)) {
   ok(new RegExp('\\bid=' + m[1] + '\\b').test(html), `$("${m[1]}") refers to an element that exists`);
 }

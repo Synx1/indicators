@@ -27,6 +27,7 @@ const gl = require('./markets');
 const presets = require('./presets');
 const series = require('./series');
 const activity = require('./activity');
+const favourite = require('./favourite');
 const {
   WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE
 } = require('./config');
@@ -35,8 +36,14 @@ const NAME = 'Indicators';
 
 /** Fleet view: aggregate only, no names. */
 function publicState() {
-  let trader = null;
-  try { trader = require('./trader').stats; } catch (_) { trader = null; }
+  let trader = null, pollMs = null;
+  try {
+    const mod = require('./trader');
+    trader = mod.stats;
+    // The scan cadence, read from the trader rather than restated here. The page counts against it to
+    // animate the heartbeat, and a second copy of the number would drift the moment POLL_MS changed.
+    pollMs = Number(mod.POLL_MS) || null;
+  } catch (_) { trader = null; }
 
   const all = users.all();
   let closed = 0, wins = 0, net = 0, open = 0, atRisk = 0, fees = 0;
@@ -177,7 +184,33 @@ function publicState() {
       passes: trader ? trader.passes : 0,
       decisions: trader ? trader.decisions : 0,
       entries: trader ? trader.entries : 0,
-      lastError: trader ? trader.lastError : null
+      lastError: trader ? trader.lastError : null,
+      // ── what the panel needs to show the loop TURNING ──
+      //
+      // `ageSec` alone cannot distinguish a bot working through a quiet market from one that has stopped:
+      // both read "14s ago". `pollMs` gives the page the cadence to count against, `busy` says whether a
+      // pass is in flight right now, `passMs` how long the last one took, and `watch` is what each coin
+      // actually looked like on that pass. None of it is anybody's position, so it stays on the open route
+      // — a page that cannot show liveness without a token is a page nobody can use to check on the bot.
+      pollMs,
+      busy: Boolean(trader && trader.busy),
+      passMs: trader && trader.passMs != null ? trader.passMs : null,
+      band: { lo: favourite.FAV_LO, hi: favourite.FAV_HI },
+      watch: gl.SYMS.map(sym => {
+        const w = (trader && trader.watch && trader.watch[sym]) || null;
+        if (!w) return { sym, on: gl.isEnabled(sym), seen: false };
+        return {
+          sym, on: gl.isEnabled(sym), seen: true, at: w.at,
+          minutesLeft: w.minutesLeft == null ? null : w.minutesLeft,
+          // The dear side and how far it still has to travel. Rounded to cents here rather than in the
+          // page, so the number the panel draws is the number the gate compared.
+          pricePct: w.nearest == null ? null : Math.round(Number(w.nearest) * 100),
+          side: w.nearestSide || null,
+          gapPct: w.gapToBand == null ? null : Math.round(Number(w.gapToBand) * 100),
+          inBand: Boolean(w.inBand),
+          skip: w.skip || null
+        };
+      })
     },
     markets: gl.SYMS.map(sym => ({ sym, on: gl.isEnabled(sym) })),
     // Fleet configuration, not anybody's data — the same class of fact as `markets` and `killed`, so it

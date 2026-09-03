@@ -24,105 +24,218 @@ module.exports = function page() {
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Indicators</title>
 <style>
+/* ── tokens ──
+   Colour carries exactly two meanings and they are kept apart. AMBER is liveness: the heartbeat, the
+   playhead, a coin sitting in the entry band. GREEN and RED are money and nothing else. The old sheet
+   used green for both "scanner healthy" and "made a profit", so a green dot and a green number meant
+   unrelated things and the eye had to read the label to know which. */
 :root{
-  --bg:#0a0b0e; --panel:#12141a; --line:#1e222b; --line2:#2a2f3a;
-  --tx:#e7e9ee; --dim:#8b91a1; --faint:#5a6070;
-  --up:#3ddc84; --down:#ff6b6b; --warn:#ffc857; --accent:#7aa2ff;
+  --ground:#0e1420; --raised:#151d2c; --sunk:#0b1017;
+  --rule:#232d43; --rule2:#31405e;
+  --tx:#dde3f0; --muted:#7a8599; --faint:#57617a;
+  --live:#f2a63b; --gain:#46d391; --loss:#f2695f;
+  --up:#46d391; --down:#f2695f; --warn:#f2a63b; --accent:#7fa6ff;
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --r:10px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--tx);
-  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
-.wrap{max-width:1100px;margin:0 auto;padding:28px 20px 80px}
+html{scrollbar-gutter:stable}
+body{background:var(--ground);color:var(--tx);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;
+  text-rendering:optimizeLegibility}
+.wrap{max-width:1080px;margin:0 auto;padding:26px 20px 90px}
+b,strong{font-weight:600}
 
-header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:22px}
-h1{font-size:19px;font-weight:650;letter-spacing:-.01em}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block}
-.dot.ok{background:var(--up);box-shadow:0 0 0 3px rgba(61,220,132,.15)}
-.dot.bad{background:var(--down);box-shadow:0 0 0 3px rgba(255,107,107,.15)}
-.sub{color:var(--dim);font-size:13px}
-.sub b{color:var(--tx);font-weight:550}
+/* ── header ── */
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+h1{font-size:19px;font-weight:640;letter-spacing:-.015em}
+.sub{color:var(--muted);font-size:13px}
+.sub b{color:var(--tx);font-weight:560}
+.hstats{margin-left:auto;display:flex;gap:22px;align-items:baseline;
+  font-size:12px;color:var(--faint)}
+.hstats span b{font-family:var(--mono);color:var(--muted);font-weight:500}
 
-/* hero */
-.hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
-  background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;
-  margin-bottom:22px}
-.cell{background:var(--panel);padding:16px 18px}
-.cell .k{color:var(--dim);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-  font-weight:600}
-.cell .v{font-family:var(--mono);font-size:24px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
-.cell .s{color:var(--faint);font-size:12px;margin-top:3px}
+/* The heartbeat. It pulses once per completed pass and holds steady between — a dot that blinks on a
+   timer would look alive even after the loop stopped, which is the one thing it must never do. */
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);display:inline-block;
+  vertical-align:-1px}
+.dot.ok{background:var(--live)}
+.dot.bad{background:var(--loss);box-shadow:0 0 0 3px rgba(242,105,95,.16)}
+.dot.beat{animation:beat .5s ease-out}
+@keyframes beat{
+  from{box-shadow:0 0 0 0 rgba(242,166,59,.55)}
+  to{box-shadow:0 0 0 9px rgba(242,166,59,0)}
+}
 
-/* tabs */
-nav{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
-nav button{background:none;border:0;color:var(--dim);font:inherit;font-size:14px;font-weight:550;
-  padding:10px 15px;cursor:pointer;border-bottom:2px solid transparent;transition:color .12s}
+/* ── the scan strip: the hero ──
+   A 15-minute settlement window drawn to scale, with the minutes the gate is allowed to act shaded and
+   a playhead that advances continuously. "Is it looking" is answered by movement, and by the coin rows
+   underneath showing what it is looking at. */
+.scan{background:var(--raised);border:1px solid var(--rule);border-radius:var(--r);
+  padding:15px 17px 13px;margin-bottom:14px}
+.scanhead{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+.scanhead .t{font-size:13px;color:var(--muted)}
+.scanhead .t b{color:var(--tx);font-weight:560}
+.scanhead .clockend{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--faint)}
+.win{position:relative;height:34px;border-radius:6px;background:var(--sunk);
+  border:1px solid var(--rule);overflow:hidden}
+.win .gate{position:absolute;top:0;bottom:0;overflow:hidden;background:rgba(242,166,59,.10);
+  border-left:1px solid rgba(242,166,59,.30);border-right:1px solid rgba(242,166,59,.30)}
+.win .gate i{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-style:normal;font-size:10.5px;color:rgba(242,166,59,.85);white-space:nowrap;letter-spacing:.02em}
+.win .head{position:absolute;top:-1px;bottom:-1px;width:2px;background:var(--live);
+  box-shadow:0 0 8px rgba(242,166,59,.7)}
+.win .head b{position:absolute;top:-1px;left:-3px;width:8px;height:8px;border-radius:50%;
+  background:var(--live)}
+.wintick{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;
+  color:var(--faint);padding:5px 1px 0}
+
+/* one row per coin: which way it leans, how far from the band */
+.watch{margin-top:12px;display:grid;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:7px;overflow:hidden}
+.wrow{display:grid;grid-template-columns:52px 62px 1fr 92px;align-items:center;gap:12px;
+  background:var(--raised);padding:8px 12px;font-size:13px}
+.wrow.off{opacity:.34}
+.wrow .s{font-weight:600;letter-spacing:-.01em}
+.wrow .p{font-family:var(--mono);font-size:14px;text-align:right;white-space:nowrap}
+.wrow .lean{font-size:11.5px;color:var(--faint)}
+.wrow .bar{position:relative;height:6px;border-radius:3px;background:var(--sunk);overflow:hidden}
+.wrow .bar u{position:absolute;left:0;top:0;bottom:0;background:var(--rule2);border-radius:3px;
+  transition:width .45s cubic-bezier(.22,.61,.36,1)}
+.wrow .bar em{position:absolute;top:-2px;bottom:-2px;background:rgba(242,166,59,.20);
+  border-left:1px solid rgba(242,166,59,.55);border-right:1px solid rgba(242,166,59,.55)}
+.wrow .d{font-family:var(--mono);font-size:12px;color:var(--faint);text-align:right;white-space:nowrap}
+.wrow.hot{background:rgba(242,166,59,.07)}
+.wrow.hot .p{color:var(--live)}
+.wrow.hot .bar u{background:var(--live)}
+.wrow.hot .d{color:var(--live)}
+.wrow.quiet .p{color:var(--faint)}
+
+/* ── money ──
+   Four figures at full size and the rest small. Eleven equal tiles meant none of them was the answer. */
+.money{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;
+  margin-bottom:1px}
+.cell{background:var(--raised);padding:14px 16px}
+.cell .k{color:var(--muted);font-size:12px;font-weight:500;letter-spacing:0}
+.cell .v{font-family:var(--mono);font-size:25px;font-weight:550;margin-top:5px;letter-spacing:-.03em}
+.cell .s{color:var(--faint);font-size:12px;margin-top:2px}
+.minor{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);border-top:0;
+  border-radius:0 0 var(--r) var(--r);overflow:hidden;margin-bottom:20px}
+.minor .cell{padding:9px 14px}
+.minor .cell .v{font-size:15px;margin-top:2px}
+.minor .cell .s{font-size:11px}
+
+/* ── tabs ── */
+nav{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-bottom:18px;
+  overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{background:none;border:0;color:var(--muted);font:inherit;font-size:14px;font-weight:540;
+  padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
 nav button:hover{color:var(--tx)}
-nav button[aria-selected=true]{color:var(--tx);border-bottom-color:var(--accent)}
-nav .count{color:var(--faint);font-size:12px;margin-left:5px;font-family:var(--mono)}
+nav button[aria-selected=true]{color:var(--tx);border-bottom-color:var(--live)}
+nav button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:4px}
+nav .count{color:var(--faint);font-size:12px;margin-left:6px;font-family:var(--mono)}
 
 section{display:none}
 section.on{display:block}
+/* Reserved height. Tables that grow and shrink between polls made the whole page jump, which is most of
+   what "choppy" was. */
+#decbody,#trabody,#coinbody,#gatbody,#hrsbody,#setbody,#accbody{min-height:220px}
 
-/* tables */
+/* ── tables ── */
 table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{text-align:left;color:var(--dim);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-  font-weight:600;padding:0 10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-tbody tr:hover{background:#15171e}
+th{text-align:left;color:var(--muted);font-size:12px;font-weight:540;letter-spacing:0;
+  padding:0 10px 8px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+tbody tr:hover{background:#18202f}
 .num{font-family:var(--mono);text-align:right;white-space:nowrap}
-.up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+.up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--warn)}.dim{color:var(--muted)}
 .faint{color:var(--faint)}
 .sym{font-weight:600}
-.pill{display:inline-block;font-size:10.5px;font-weight:650;letter-spacing:.04em;
-  padding:2px 7px;border-radius:5px;background:#1c2029;color:var(--dim);text-transform:uppercase}
-.pill.win{background:rgba(61,220,132,.13);color:var(--up)}
-.pill.loss{background:rgba(255,107,107,.13);color:var(--down)}
-.pill.open{background:rgba(122,162,255,.13);color:var(--accent)}
-.pill.live{background:rgba(255,107,107,.13);color:var(--down)}
-.pill.paper{background:#1c2029;color:var(--dim)}
-.why{color:var(--dim);font-size:12.5px;line-height:1.45}
+.pill{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.01em;
+  padding:2px 7px;border-radius:5px;background:#1d2637;color:var(--muted)}
+.pill.win{background:rgba(70,211,145,.13);color:var(--gain)}
+.pill.loss{background:rgba(242,105,95,.13);color:var(--loss)}
+.pill.open{background:rgba(127,166,255,.13);color:var(--accent)}
+.pill.live{background:rgba(242,105,95,.13);color:var(--loss)}
+.pill.paper{background:#1d2637;color:var(--muted)}
+.why{color:var(--muted);font-size:12.5px;line-height:1.45}
 .mkt{display:flex;gap:6px;flex-wrap:wrap}
 .mkt span{font-family:var(--mono);font-size:12px;padding:3px 8px;border-radius:5px;
-  background:#1c2029;color:var(--faint)}
-.mkt span.on{background:rgba(61,220,132,.12);color:var(--up)}
-.note{color:var(--faint);font-size:12.5px;line-height:1.6;margin-top:14px;max-width:74ch}
+  background:#1d2637;color:var(--faint)}
+.mkt span.on{background:rgba(70,211,145,.12);color:var(--gain)}
+.note{color:var(--faint);font-size:12.5px;line-height:1.65;margin-top:16px;max-width:72ch}
+.note b{color:var(--muted)}
 .empty{color:var(--faint);padding:26px 10px;font-size:13.5px}
 .coinbar{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
-.coinbar button{background:#161922;color:var(--dim);border:1px solid var(--line2);border-radius:7px;
-  padding:6px 11px;font:600 12px/1 inherit;cursor:pointer;letter-spacing:.03em}
-.coinbar button[aria-selected=true]{background:rgba(122,162,255,.14);color:var(--accent);
-  border-color:var(--accent)}
+.coinbar button{background:#18202f;color:var(--muted);border:1px solid var(--rule2);border-radius:7px;
+  padding:6px 11px;font:600 12px/1 inherit;cursor:pointer;letter-spacing:.02em}
+.coinbar button[aria-selected=true]{background:rgba(242,166,59,.13);color:var(--live);
+  border-color:rgba(242,166,59,.5)}
 .coinbar button.off{opacity:.42}
-.chartwrap{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:12px 10px 4px}
+.chartwrap{border:1px solid var(--rule);border-radius:var(--r);background:var(--raised);
+  padding:12px 10px 4px}
 .chartwrap+.chartwrap{margin-top:10px}
 .chartwrap svg{display:block;width:100%;height:auto;overflow:visible}
 .legend{display:flex;gap:15px;flex-wrap:wrap;color:var(--faint);font-size:11.5px;padding:9px 4px 3px}
 .legend i{display:inline-block;width:10px;height:2px;vertical-align:middle;margin-right:5px}
 .legend i.sq{width:7px;height:7px;border-radius:1px}
-.readout{font-family:var(--mono);font-size:11.5px;color:var(--dim);padding:7px 4px 2px;min-height:18px}
+.readout{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding:7px 4px 2px;min-height:18px}
 .bars{display:grid;grid-template-columns:auto 1fr auto;gap:5px 12px;align-items:center;
   font-size:13px;margin-top:4px}
-.bars .lbl{color:var(--dim)}
-.bars .track{height:7px;background:#171a21;border-radius:3px;overflow:hidden}
-.bars .fill{display:block;height:100%;min-width:2px;background:var(--accent);opacity:.8;border-radius:3px}
+.bars .lbl{color:var(--muted)}
+.bars .track{height:7px;background:var(--sunk);border-radius:3px;overflow:hidden}
+.bars .fill{display:block;height:100%;min-width:2px;background:var(--accent);opacity:.85;border-radius:3px}
 .bars .n{font-family:var(--mono);color:var(--faint);font-size:12px;text-align:right}
-.locked{border:1px dashed var(--line2);border-radius:10px;padding:20px;color:var(--dim);
-  font-size:13.5px;line-height:1.6}
-.locked code{font-family:var(--mono);background:#1c2029;padding:1px 6px;border-radius:4px;
-  color:var(--warn)}
-@media(max-width:640px){.wrap{padding:18px 13px 60px}.cell .v{font-size:20px}
-  th,td{padding-left:7px;padding-right:7px}}
+.locked{border:1px dashed var(--rule2);border-radius:var(--r);padding:20px;color:var(--muted);
+  font-size:13.5px;line-height:1.65}
+.locked code{font-family:var(--mono);background:#1d2637;padding:1px 6px;border-radius:4px;
+  color:var(--live)}
+
+@media(max-width:640px){
+  .wrap{padding:16px 12px 60px}
+  .cell .v{font-size:21px}
+  th,td{padding-left:7px;padding-right:7px}
+  .hstats{width:100%;margin-left:0;gap:16px}
+  .wrow{grid-template-columns:42px 74px 1fr;gap:9px}
+  .wrow .d{display:none}
+  /* The strip's own status line already says where the clock is, so the label inside the shaded zone is
+     redundant on a phone and there is no room for it. */
+  .win .gate i{display:none}
+  .scan{padding:13px 13px 11px}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
 </style></head><body><div class=wrap>
 
 <header>
   <h1>Indicators</h1>
   <span class=sub><span class="dot" id=hdot></span> <span id=hstat>connecting…</span></span>
-  <span class=sub style="margin-left:auto" id=hasof></span>
+  <span class=hstats id=hstats></span>
 </header>
 
-<div class=hero id=hero></div>
+<!-- The scan strip. A 15-minute settlement window drawn to scale: the shaded band is the stretch of the
+     clock where the gate is allowed to act, the playhead advances every 100ms, and each coin row shows
+     the price the book is charging on the leaning side and how far it still is from the entry band. -->
+<div class=scan id=scan>
+  <div class=scanhead>
+    <span class=t id=scant>waiting for the first pass…</span>
+    <span class=clockend id=scanend></span>
+  </div>
+  <div class=win id=win>
+    <div class=gate id=wingate><i id=wingatelbl></i></div>
+    <div class=head id=winhead><b></b></div>
+  </div>
+  <div class=wintick><span id=winopen></span><span id=winclose></span></div>
+  <div class=watch id=watch></div>
+</div>
+
+<div class=money id=hero></div>
+<div class=minor id=heromin></div>
 
 <nav id=tabs>
   <button data-t=decisions aria-selected=true>Decisions<span class=count id=cdec></span></button>
@@ -227,26 +340,40 @@ function heroCells(d) {
   // earliest warning that a rally has turned the edge — it moves before the total does.
   const dr = d.direction || { open: { up: 0, down: 0 }, up: {}, down: {} };
   const dHit = dr.down && dr.down.recentHit != null ? pct(dr.down.recentHit) : '—';
+  // The first four are the headline; everything after is the quiet row. Live money leads, paper follows,
+  // then the two numbers that say whether the edge is working and what is exposed right now.
   return [
     ['Live P&L', signed(lv.net), cls(lv.net),
-      lv.closed ? lv.closed + ' closed · today ' + signed(lv.today) : 'no live trades yet'],
+      lv.closed ? lv.closed + ' closed, today ' + signed(lv.today) : 'no live trades yet'],
+    ['Paper P&L', signed(pp.net), cls(pp.net),
+      pp.closed ? pp.closed + ' closed, today ' + signed(pp.today) : 'no paper trades yet'],
+    ['Win rate', f.closed ? pct(f.hit) : '—', '', f.closed ? f.wins + ' won, ' + f.losses + ' lost' : 'no trades yet'],
+    ['Open now', String(f.open), '', f.atRisk ? money(f.atRisk) + ' at risk' : 'nothing at risk'],
     ['Live day high', money(lv.dayHigh), 'dim',
       lv.today || lv.closed ? 'best equity today' : 'nothing closed today'],
-    ['Paper P&L', signed(pp.net), cls(pp.net),
-      pp.closed ? pp.closed + ' closed · today ' + signed(pp.today) : 'no paper trades yet'],
     ['Paper day high', money(pp.dayHigh), 'dim', 'best equity today'],
-    ['Win rate', f.closed ? pct(f.hit) : '—', '', f.closed ? f.wins + 'W / ' + f.losses + 'L' : 'no trades yet'],
-    ['Open', String(f.open), '', f.atRisk ? money(f.atRisk) + ' at risk' : 'nothing at risk'],
     ['Direction now', (dr.open.down || 0) + '↓ / ' + (dr.open.up || 0) + '↑', '',
       'open exposure by side'],
-    ['DOWN book', dHit, dr.warn ? 'down' : '',
-      dr.down && dr.down.recentN ? 'last ' + dr.down.recentN + (dr.warn ? ' · tilt turning' : ' · structural side') : 'no DOWN trades yet'],
+    ['Down book', dHit, dr.warn ? 'down' : '',
+      dr.down && dr.down.recentN
+        ? 'last ' + dr.down.recentN + (dr.warn ? ', tilt turning' : ', the structural side')
+        : 'no down trades yet'],
     ['Fees', money(f.fees), 'dim', 'paid to Kalshi'],
-    ['Accounts', String(f.accounts), '', d.killed ? 'HALTED' : (sc.healthy ? 'scanning' : 'scanner quiet')],
-    ['Signals', String(sc.decisions), '', sc.entries + ' filled · ' + sc.passes + ' passes']
-  ].map(c => '<div class=cell><div class=k>' + c[0] + '</div><div class="v ' + c[2] + '">' +
-    c[1] + '</div><div class=s>' + esc(c[3]) + '</div></div>').join('');
+    ['Accounts', String(f.accounts), '', f.accounts === 1 ? 'one account armed or paper' : 'armed or paper'],
+    ['Signals', String(sc.decisions), '', sc.entries + ' filled, ' + sc.passes + ' passes']
+  ];
 }
+/**
+ * The four figures that answer "is it making money", at full size.
+ *
+ * Eleven equal tiles meant none of them was the answer — the eye had nowhere to land, which is half of
+ * why the panel read as noise. These four are the ones somebody opens the page for; the other seven are
+ * still here, one line down and quiet, because they are worth having and not worth shouting.
+ */
+const CELL = c => '<div class=cell><div class=k>' + c[0] + '</div><div class="v ' + c[2] + '">' +
+  c[1] + '</div><div class=s>' + esc(c[3]) + '</div></div>';
+function heroMain(d) { return heroCells(d).slice(0, 4).map(CELL).join(''); }
+function heroMinor(d) { return heroCells(d).slice(4).map(CELL).join(''); }
 
 const KIND = {
   TAKEN:  ['SIGNAL', 'pill open'],
@@ -271,10 +398,10 @@ function renderDecisions(d, pub) {
     '<span class="' + (m.on ? 'on' : '') + '">' + esc(m.sym) + '</span>').join('') + '</div>';
 
   if (!d.events.length) {
-    $('decbody').innerHTML = mk + '<div class=empty>Nothing decided yet — the first pass runs within 20 seconds of startup.</div>';
+    writeIf('decbody', mk + '<div class=empty>Nothing decided yet — the first pass runs within 20 seconds of startup.</div>');
     return;
   }
-  $('decbody').innerHTML = mk +
+  writeIf('decbody', mk +
     (bars ? '<div class=note style="margin:0 0 16px"><b>Why rounds were declined</b></div>' + bars + '<div style="height:20px"></div>' : '') +
     '<table><thead><tr><th>when</th><th>market</th><th></th><th>what happened</th><th class=num>conf</th><th class=num>ind</th></tr></thead><tbody>' +
     d.events.map(e => {
@@ -291,14 +418,14 @@ function renderDecisions(d, pub) {
         '</td>' +
         '<td class="num dim">' + (m.confidence != null ? m.confidence + '%' : '') + '</td>' +
         '<td class="num dim">' + (m.confirm != null ? m.confirm + '/4' : '') + '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table>');
 }
 
 function renderTrades(d) {
-  if (d.locked) { $('trabody').innerHTML = lockedBox('Trades name the account that took them'); return; }
+  if (d.locked) { writeIf('trabody', lockedBox('Trades name the account that took them')); return; }
   $('ctra').textContent = d.trades.length ? d.trades.length : '';
-  if (!d.trades.length) { $('trabody').innerHTML = '<div class=empty>No positions yet.</div>'; return; }
-  $('trabody').innerHTML =
+  if (!d.trades.length) { writeIf('trabody', '<div class=empty>No positions yet.</div>'); return; }
+  writeIf('trabody',
     '<table><thead><tr><th>when</th><th>market</th><th>account</th><th></th>' +
     '<th class=num>size</th><th class=num>entry</th><th class=num>exit</th>' +
     '<th class=num>fees</th><th class=num>P&L</th><th>read</th></tr></thead><tbody>' +
@@ -320,7 +447,7 @@ function renderTrades(d) {
         '<td class=why>' + (t.style === 'DIP' ? 'bought a dip' : 'chased a move') +
         '<div class=faint style="font-size:11px">' + (t.confidence || '—') + '% · ' +
         (t.confirm == null ? '—' : t.confirm + '/4') + '</div></td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table>');
 }
 
 // The per-coin scoreboard. Reads /api/state, which is OPEN — these are fleet aggregates naming
@@ -340,10 +467,10 @@ function renderCoins(pub) {
   const rows = (pub && pub.coins) || [];
   const traded = rows.filter(c => c.n > 0);
   $('ccoin').textContent = traded.length ? traded.length : '';
-  if (!rows.length) { $('coinbody').innerHTML = '<div class=empty>No market list yet.</div>'; return; }
+  if (!rows.length) { writeIf('coinbody', '<div class=empty>No market list yet.</div>'); return; }
   if (!traded.length) {
-    $('coinbody').innerHTML = '<div class=empty>No settled trades yet — every coin below is armed ' +
-      'and waiting. This table fills in as positions close.</div>' + coinTable(rows);
+    writeIf('coinbody', '<div class=empty>No settled trades yet — every coin below is armed ' +
+      'and waiting. This table fills in as positions close.</div>' + coinTable(rows));
     return;
   }
   // Headline only from coins with a real sample; if none qualify, say so rather than crowning a
@@ -360,7 +487,7 @@ function renderCoins(pub) {
       })()
     : '<b class=warn>No coin has 10 settled trades yet</b>, so there is no best market to name — ' +
       'the rows below are early readings, not rankings.';
-  $('coinbody').innerHTML = '<div class=note style="margin:0 0 14px">' + head + '</div>' + coinTable(rows);
+  writeIf('coinbody', '<div class=note style="margin:0 0 14px">' + head + '</div>' + coinTable(rows));
 }
 function coinTable(rows) {
   const maxAbs = Math.max(1, ...rows.map(c => Math.abs(c.net)));
@@ -400,20 +527,20 @@ function renderGates(d) {
   const table = (title, rows) => '<h3>' + esc(title) + '</h3><table><thead><tr><th>bucket</th><th>taken</th>' +
     '<th>won</th><th>rate</th><th>needs</th><th>margin</th><th>net</th></tr></thead><tbody>' +
     rows.map(row).join('') + '</tbody></table>';
-  $('gatbody').innerHTML =
+  writeIf('gatbody',
     (d.settled ? '' : '<div class=note>No settled trades yet — nothing to judge.</div>') +
     table('Overall', [d.overall]) +
     table('By indicator agreement', d.byConfirm) +
     table('By RSI stretch' + (d.withRsi < d.settled ? ' (' + (d.settled - d.withRsi) + ' older trades carry no RSI)' : ''), d.byRsi) +
-    table('By direction', d.byDirection);
+    table('By direction', d.byDirection));
   $('cgat').textContent = d.settled || '';
 }
 
 const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';function renderHours(d) {
-  if (d.locked) { $('hrsbody').innerHTML = lockedBox('Hourly P&L is account money'); return; }
+  if (d.locked) { writeIf('hrsbody', lockedBox('Hourly P&L is account money')); return; }
   $('chrs').textContent = d.totalClosed ? d.totalClosed : '';
   const rows = (d.hours || []).filter(h => h.taken > 0);
-  if (!rows.length) { $('hrsbody').innerHTML = '<div class=empty>No settled trades yet — the hourly breakdown fills in as positions close.</div>'; return; }
+  if (!rows.length) { writeIf('hrsbody', '<div class=empty>No settled trades yet — the hourly breakdown fills in as positions close.</div>'); return; }
   const maxAbs = Math.max(1, ...rows.map(h => Math.abs(h.net)));
   // "best time" headline needs a floor on sample size so a lucky 1-trade hour can't win it
   const solid = rows.filter(h => h.taken >= 3);
@@ -423,7 +550,7 @@ const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 P
     return '<span style="display:flex;height:8px;background:#171a21;border-radius:3px;overflow:hidden;justify-content:' +
       (n < 0 ? 'flex-end' : 'flex-start') + '"><span style="display:block;height:100%;min-width:2px;border-radius:3px;width:' +
       w + '%;background:' + (n < 0 ? 'var(--down)' : 'var(--up)') + '"></span></span>'; };
-  $('hrsbody').innerHTML =
+  writeIf('hrsbody',
     '<div class=note style="margin:0 0 14px"><b>Best time to trade — profit by the ET hour a position was opened.</b> ' +
     'Best so far: <b class=up>' + hourLabel(best.hour) + '</b> (' + signed(best.net) + ' on ' + best.taken + '), ' +
     'worst: <b class=down>' + hourLabel(worst.hour) + '</b> (' + signed(worst.net) + ' on ' + worst.taken + '). ' +
@@ -435,7 +562,7 @@ const hourLabel = h => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 P
       '<td class=num>' + h.wins + ' / ' + h.losses + '</td>' +
       '<td class=num>' + (h.taken ? pct(h.hit) : '—') + '</td>' +
       '<td class="num ' + cls(h.net) + '">' + signed(h.net) + '</td>' +
-      '<td>' + bar(h.net) + '</td></tr>').join('') + '</tbody></table>';
+      '<td>' + bar(h.net) + '</td></tr>').join('') + '</tbody></table>');
 }
 
 // The setup sheet. Private, because the "now" column is one account's configuration.
@@ -487,13 +614,13 @@ function shadowBlock(pub) {
 }
 
 function renderSetup(d, pub) {
-  if (d.locked) { $('setbody').innerHTML = lockedBox('Your settings and bankroll are account data'); return; }
+  if (d.locked) { writeIf('setbody', lockedBox('Your settings and bankroll are account data')); return; }
   const accs = d.accounts || [];
   const attention = accs.reduce((a, x) => a + (x.attention || 0), 0);
   $('cset').textContent = attention ? attention : '';
   const shadowHtml = shadowBlock(pub);
-  if (!accs.length) { $('setbody').innerHTML = shadowHtml + '<div class=empty>No accounts yet.</div>'; return; }
-  $('setbody').innerHTML = shadowHtml + accs.map(a => {
+  if (!accs.length) { writeIf('setbody', shadowHtml + '<div class=empty>No accounts yet.</div>'); return; }
+  writeIf('setbody', shadowHtml + accs.map(a => {
     const s = a.summary;
     const head = '<div class=note style="margin:0 0 14px"><b>' + esc(a.who) + '</b> ' +
       '<span class="pill ' + (a.live ? (a.armed ? 'live' : '') : 'paper') + '">' +
@@ -531,13 +658,13 @@ function renderSetup(d, pub) {
           '</td></tr>';
       }).join('') + '</tbody></table>';
     return head + box + table + '<div style="height:26px"></div>';
-  }).join('');
+  }).join(''));
 }
 
-function renderAccounts(d) {  if (d.locked) { $('accbody').innerHTML = lockedBox('Account P&L is per-person money'); return; }
+function renderAccounts(d) {  if (d.locked) { writeIf('accbody', lockedBox('Account P&L is per-person money')); return; }
   $('cacc').textContent = d.accounts.length ? d.accounts.length : '';
-  if (!d.accounts.length) { $('accbody').innerHTML = '<div class=empty>No accounts yet.</div>'; return; }
-  $('accbody').innerHTML =
+  if (!d.accounts.length) { writeIf('accbody', '<div class=empty>No accounts yet.</div>'); return; }
+  writeIf('accbody',
     '<table><thead><tr><th>account</th><th></th><th class=num>equity</th><th class=num>started</th>' +
     '<th class=num>realised</th><th class=num>peak</th><th class=num>today</th>' +
     '<th class=num>closed</th><th class=num>win%</th><th class=num>open</th></tr></thead><tbody>' +
@@ -554,7 +681,7 @@ function renderAccounts(d) {  if (d.locked) { $('accbody').innerHTML = lockedBox
         '<td class=num>' + a.closed + '</td>' +
         '<td class=num>' + (a.closed ? pct(a.hit) : '—') + '</td>' +
         '<td class=num>' + a.open + (a.atRisk ? '<div class="faint" style="font-size:11px">' + money(a.atRisk) + '</div>' : '') + '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table>');
 }
 
 
@@ -601,7 +728,7 @@ function niceNum(v, dp) {
 }
 
 function renderChart(d, tr, pub) {
-  $('coinbar').innerHTML = coinButtons(pub);
+  writeIf('coinbar', coinButtons(pub));
   var body = $('chrbody');
   if (!d || !d.ok) { body.innerHTML = '<div class=empty>' + esc((d && d.why) || 'no series yet') + '</div>'; return; }
   var pts = (d.points || []).filter(function (p) { return p && p.at; });
@@ -837,21 +964,176 @@ async function get(path) {
   } catch (_) { return null; }
 }
 
-let pub = null;
-async function refresh() {
-  const s = await get('/api/state');
-  if (s) {
-    pub = s;
-    $('hero').innerHTML = heroCells(s);
-    const sc = s.scanner;
-    $('hdot').className = 'dot ' + (s.killed ? 'bad' : sc.healthy ? 'ok' : 'bad');
-    $('hstat').innerHTML = s.killed
-      ? '<b class=down>halted — kill switch on</b>'
-      : sc.healthy
-        ? 'scanning · last pass <b>' + sc.ageSec + 's</b> ago'
-        : (sc.lastPass ? '<b class=warn>scanner quiet — last pass ' + sc.ageSec + 's ago</b>' : 'starting…');
-    $('hasof').textContent = 'updated ' + new Date(s.asOf).toLocaleTimeString();
+/* ── writing to the DOM only when something changed ──
+   The old refresh() rewrote whole innerHTML blocks every five seconds whether or not the numbers had
+   moved. On a bot that declines most rounds almost nothing changes between polls, so nearly every write
+   was a no-op that still destroyed and rebuilt the table you were reading: hover dropped, text reflowed,
+   selection vanished, and the page twitched. That twitch was the "choppy". */
+const _last = new Map();
+function writeIf(id, html) {
+  if (_last.get(id) === html) return false;
+  _last.set(id, html);
+  const el = $(id);
+  if (el) el.innerHTML = html;
+  return true;
+}
+
+/* ── the 15-minute settlement window, from the wall clock ──
+   Rounds close on the quarter hour, so the window needs no server field and cannot drift out of step
+   with one. Deriving it locally also means the playhead keeps moving if a poll fails, which is exactly
+   when a person is staring at the page wondering whether anything is alive. */
+const WIN_MS = 15 * 60 * 1000;
+function windowNow(at) {
+  const close = Math.ceil(at / WIN_MS) * WIN_MS;
+  return { open: close - WIN_MS, close: close, frac: (at - (close - WIN_MS)) / WIN_MS };
+}
+
+let beatSeen = null;      // scanner.passes at the last pulse, so the dot beats once per real pass
+let lastState = null;
+
+/* Paint the strip. Called at 100ms from tick(), so it must do arithmetic and no allocation-heavy work. */
+function paintStrip(at) {
+  const st = lastState;
+  if (!st) return;
+  const sc = st.scanner || {};
+  const w = windowNow(at);
+  const clock = (st.preset && st.preset.clock) || { minLeft: 6, maxLeft: 12 };
+
+  // The stretch of the window where the gate may act, as a share of its width. minLeft/maxLeft are
+  // MINUTES LEFT, so they run backwards relative to the strip: T-12 is early, T-7 is late.
+  const gl = Math.max(0, (15 - clock.maxLeft) / 15);
+  const gr = Math.min(1, (15 - clock.minLeft) / 15);
+  const gate = $('wingate');
+  if (gate) {
+    gate.style.left = (gl * 100).toFixed(2) + '%';
+    gate.style.width = ((gr - gl) * 100).toFixed(2) + '%';
   }
+  const lbl = $('wingatelbl');
+  if (lbl) {
+    const txt = 'can enter T-' + clock.maxLeft + ' to T-' + clock.minLeft;
+    if (lbl.textContent !== txt) lbl.textContent = txt;
+  }
+  const head = $('winhead');
+  if (head) head.style.left = (Math.min(1, Math.max(0, w.frac)) * 100).toFixed(3) + '%';
+
+  const mins = (w.close - at) / 60000;
+  const inGate = mins <= clock.maxLeft && mins >= clock.minLeft;
+  const o = $('winopen'), c = $('winclose');
+  if (o) o.textContent = clock2(w.open);
+  if (c) c.textContent = clock2(w.close) + '  settles';
+
+  // The line that answers "is it looking". It counts in tenths so it is visibly moving, and it says what
+  // the loop is doing rather than only how long ago it last did it.
+  const since = sc.lastPass ? (at - new Date(sc.lastPass).getTime()) / 1000 : null;
+  const every = (sc.pollMs || 6000) / 1000;
+  let t;
+  if (st.killed) t = '<b class=down>halted</b> — the kill switch is on, nothing is being scanned';
+  else if (since == null) t = 'starting up, no pass yet';
+  else if (since > every * 6) t = '<b class=warn>quiet</b> — no pass for ' + since.toFixed(1) + 's';
+  else if (sc.busy) t = '<b>scanning</b> all ' + (sc.watch ? sc.watch.length : 7) + ' markets now';
+  else t = '<b>looking</b> — last pass ' + since.toFixed(1) + 's ago, next in ' +
+    Math.max(0, every - since).toFixed(1) + 's';
+  const tn = $('scant');
+  if (tn) tn.innerHTML = t;
+  const se = $('scanend');
+  if (se) {
+    se.textContent = inGate
+      ? 'inside the entry window, ' + mins.toFixed(1) + 'm to settle'
+      : (mins > clock.maxLeft ? 'entry window opens in ' + (mins - clock.maxLeft).toFixed(1) + 'm'
+                              : 'entry window closed, ' + mins.toFixed(1) + 'm to settle');
+    se.style.color = inGate ? 'var(--live)' : '';
+  }
+}
+const clock2 = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/* One row per market: which side the book is charging more for, and how far that price still has to
+   travel to reach the entry band. A spinner says the page is alive; this says the BOT is. */
+function paintWatch(st) {
+  const sc = st.scanner || {};
+  const rows = sc.watch || [];
+  const band = sc.band || { lo: 0.85, hi: 0.90 };
+  const lo = Math.round(band.lo * 100), hi = Math.round(band.hi * 100);
+  if (!rows.length) return;
+  const html = rows.map(r => {
+    if (!r.on) {
+      return '<div class="wrow off"><span class=s>' + esc(r.sym) + '</span>' +
+        '<span class=p>—</span><span class=bar></span><span class=d>turned off</span></div>';
+    }
+    if (!r.seen || r.pricePct == null) {
+      const why = r.skip === 'no-window' ? 'between rounds' : (r.seen ? 'no quote' : 'not scanned yet');
+      return '<div class="wrow quiet"><span class=s>' + esc(r.sym) + '</span>' +
+        '<span class=p>—</span><span class=bar></span><span class=d>' + why + '</span></div>';
+    }
+    // The track is the whole price line, 0 to 100c, with the entry band drawn on it in place. Scaling the
+    // track to the band's lower edge instead made a 73c contract fill 86% of the bar and read as nearly
+    // there, when it is twelve cents away — the bar has to agree with the number beside it.
+    const fill = Math.min(100, Math.max(1.5, r.pricePct));
+    const lean = r.side === 'YES' ? 'up' : 'down';
+    const dist = r.inBand ? 'in the band'
+      : (r.gapPct != null && r.gapPct > 0 ? r.gapPct + '¢ to go' : 'past ' + hi + '¢');
+    return '<div class="wrow' + (r.inBand ? ' hot' : '') + '">' +
+      '<span class=s>' + esc(r.sym) + '</span>' +
+      '<span class=p>' + r.pricePct + '¢<span class=lean> ' + lean + '</span></span>' +
+      '<span class=bar><em style="left:' + lo + '%;width:' + (hi - lo) + '%"></em>' +
+        '<u style="width:' + fill.toFixed(1) + '%"></u></span>' +
+      '<span class=d>' + dist + '</span></div>';
+  }).join('');
+  writeIf('watch', html);
+}
+
+let pub = null;
+
+/**
+ * The state poll: cheap, frequent, and the only thing the strip needs.
+ *
+ * Split from the tab poll because they have different jobs. /api/state is a few kilobytes and carries the
+ * heartbeat, so it runs often enough that the strip is never showing a stale pass. The tab payloads are
+ * the big ones — decisions, trades, series — and nothing in them can change faster than a pass, so they
+ * keep the slower cadence they always had.
+ */
+async function pollState() {
+  const s = await get('/api/state');
+  if (!s) return;
+  const prev = lastState;
+  pub = s;
+  lastState = s;
+  const sc = s.scanner || {};
+
+  // The dot beats once per COMPLETED pass, driven off the counter rather than a timer. A dot that blinks
+  // on an interval looks alive whether or not the loop is turning, which is the one thing it must never do.
+  if (prev && sc.passes > (prev.scanner ? prev.scanner.passes : 0)) {
+    const dot = $('hdot');
+    if (dot) { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); }
+  }
+  const dot = $('hdot');
+  if (dot) {
+    const want = 'dot ' + (s.killed ? 'bad' : sc.healthy ? 'ok' : 'bad') +
+      (dot.classList.contains('beat') ? ' beat' : '');
+    if (dot.className !== want) dot.className = want;
+  }
+  const hs = $('hstat');
+  if (hs) {
+    const t = s.killed ? '<b class=down>halted</b>'
+      : sc.healthy ? (s.preset ? esc(s.preset.label) + ' preset' : 'running')
+      : '<b class=warn>scanner quiet</b>';
+    if (hs.innerHTML !== t) hs.innerHTML = t;
+  }
+  // The counters that say how much work has been done. Spaced rather than joined with dots, so each is a
+  // figure with a name instead of one run-on string.
+  writeIf('hstats',
+    '<span>passes <b>' + (sc.passes || 0) + '</b></span>' +
+    '<span>signals <b>' + (sc.decisions || 0) + '</b></span>' +
+    '<span>filled <b>' + (sc.entries || 0) + '</b></span>' +
+    (sc.passMs != null ? '<span>pass <b>' + (sc.passMs / 1000).toFixed(1) + 's</b></span>' : '') +
+    (sc.lastError ? '<span class=warn>' + esc(String(sc.lastError).slice(0, 60)) + '</span>' : ''));
+
+  writeIf('hero', heroMain(s));
+  writeIf('heromin', heroMinor(s));
+  paintWatch(s);
+}
+
+/** The heavy half: only the tab actually on screen, and only every few seconds. */
+async function pollTab() {
   if (tab === 'decisions') { const d = await get('/api/decisions'); if (d && pub) renderDecisions(d, pub); }
   if (tab === 'coins')     { if (pub) renderCoins(pub); }
   if (tab === 'chart') {
@@ -859,7 +1141,8 @@ async function refresh() {
     if (ser) renderChart(ser, tr, pub);
     if (ser && ser.counts) {
       const tot = Object.keys(ser.counts).reduce((a, k) => a + ser.counts[k], 0);
-      $('cchr').textContent = tot ? String(tot) : '';
+      const el = $('cchr');
+      if (el && el.textContent !== (tot ? String(tot) : '')) el.textContent = tot ? String(tot) : '';
     }
   }
   if (tab === 'trades')    { const d = await get('/api/trades');    if (d) renderTrades(d); }
@@ -869,10 +1152,23 @@ async function refresh() {
   if (tab === 'accounts')  { const d = await get('/api/accounts');  if (d) renderAccounts(d); }
 }
 
+/** Kept for the tab-switch handler, which wants both halves at once. */
+async function refresh() { await pollState(); await pollTab(); }
+
 refresh();
-// Every 5s. The underlying data cannot change faster than the 20s scan, so polling harder would
-// only cost the trading process CPU for no new information.
-setInterval(refresh, 5000);
+
+/* ── the three clocks ──
+   100ms paints. Nothing is fetched on that beat: the playhead position and the countdown are arithmetic on
+   the last known pass time, so they advance smoothly and keep advancing if a poll fails — which is exactly
+   when somebody is watching the page wondering whether anything is alive.
+   1.5s fetches the heartbeat. The loop itself turns every 6s, so this is fast enough to never show a pass
+   that has already been superseded, and slow enough to cost the trading process nothing.
+   5s fetches the tab. None of that data can change faster than a pass. */
+setInterval(() => paintStrip(Date.now()), 100);
+setInterval(pollState, 1500);
+setInterval(pollTab, 5000);
+// Paint immediately rather than waiting 100ms, so the strip is never briefly empty on load.
+paintStrip(Date.now());
 </script>
 </div></body></html>`;
 };

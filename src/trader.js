@@ -374,7 +374,33 @@ const isRateLimit = e => e && (e.response?.status === 429 || /429/.test(String(e
 let log = () => {};
 let running = false;
 let timer = null;
-const stats = { passes: 0, decisions: 0, entries: 0, skips: {}, lastPass: null, lastError: null };
+/**
+ * What the panel needs to show that the loop is TURNING, not merely that it ran a while ago.
+ *
+ * `watch` is one row per coin, rewritten every pass: how far the round is from settling, which side the
+ * book is charging more for, and how far that price still has to travel to reach the entry band. A page
+ * built on `lastPass` alone can only say "14s ago", which looks identical whether the bot is working
+ * through a quiet market or has silently stopped caring. This says what it is looking AT.
+ *
+ * `busy` and `passMs` are the heartbeat either side of that: whether a pass is in flight right now, and
+ * how long the last one took.
+ */
+const stats = {
+  passes: 0, decisions: 0, entries: 0, skips: {}, lastPass: null, lastError: null,
+  watch: {}, busy: false, passMs: null, passStartedAt: null
+};
+
+/**
+ * Record what one coin looked like on this pass, whether it was taken or refused.
+ *
+ * Every branch of the pass calls this — a decision, a gate refusal, a thrown read — because a coin that
+ * silently stops appearing is exactly the failure the strip exists to make visible. A missing row is
+ * information; a stale row pretending to be current is not, so `at` is always stamped.
+ */
+function noteWatch(sym, patch) {
+  const prev = stats.watch[sym] || {};
+  stats.watch[sym] = { sym, at: Date.now(), ...prev, ...patch };
+}
 
 const noteSkip = code => { stats.skips[code] = (stats.skips[code] || 0) + 1; };
 
@@ -510,7 +536,15 @@ async function favouriteFor(coin, market, strike, s, candles) {
     noAsk: parseFloat(quoted.no_ask_dollars || 0),
     minutesLeft: ml
   };
-  if (r.skip) return { skip: r.skip, why: r.why, obs };
+  // The clock and the distance travel WITH the refusal. The panel's live strip needs a row for every coin,
+  // and on any given pass most coins are refused — a strip that only knew about entries would be blank
+  // almost always, which is the opposite of showing that the loop is turning.
+  if (r.skip) {
+    return {
+      skip: r.skip, why: r.why, obs, minutesLeft: ml,
+      nearest: r.nearest, nearestSide: r.nearestSide, gapToBand: r.gapToBand
+    };
+  }
 
   // The indicators and the spot are reported, never gated on. They are already in hand, they make the DM
   // and the site legible, and keeping them out of the decision is the point: the measured edge was taken
@@ -1619,6 +1653,8 @@ async function refreshBalances(accounts) {
 
 async function runOnce() {
   stats.passes++;
+  stats.busy = true;
+  stats.passStartedAt = Date.now();
   const accounts = users.all();
 
   // A lapse must not leave `armed` set. Otherwise entering a new key weeks later makes the account
@@ -1713,10 +1749,23 @@ async function runOnce() {
   for (const res of decided) {
     if (!res.ok) { noteSkip('error'); stats.lastError = `pass: ${res.error && res.error.message}`; continue; }
     const { coin, d, err } = res.value;
-    if (err) { noteSkip('error'); stats.lastError = `${coin.sym}: ${err.message}`; continue; }
+    if (err) {
+      noteSkip('error'); stats.lastError = `${coin.sym}: ${err.message}`;
+      // A coin that silently stops appearing in the strip is the failure the strip exists to expose, so a
+      // thrown read is recorded as a row rather than leaving the last good one to look current.
+      noteWatch(coin.sym, { skip: 'error', why: err.message, inBand: false, nearest: null, gapToBand: null });
+      continue;
+    }
 
     if (d.skip) {
       noteSkip(d.skip);
+      noteWatch(coin.sym, {
+        skip: d.skip, why: d.why, inBand: false,
+        minutesLeft: d.minutesLeft == null ? null : +Number(d.minutesLeft).toFixed(2),
+        nearest: d.nearest == null ? null : d.nearest,
+        nearestSide: d.nearestSide || null,
+        gapToBand: d.gapToBand == null ? null : d.gapToBand
+      });
       // A too-dear market that cleared every other gate is the sample the ceiling question needs, so
       // it is recorded before the skip is logged. record() is idempotent per ticker: a pass runs every
       // POLL_MS and the same market stays too-dear for minutes, so without that the shadow win rate
@@ -1742,6 +1791,12 @@ async function runOnce() {
       continue;
     }
     stats.decisions++;
+    noteWatch(coin.sym, {
+      skip: null, why: null, inBand: true,
+      minutesLeft: +Number(d.minutesLeft).toFixed(2),
+      nearest: d.price, nearestSide: d.side, gapToBand: 0,
+      strategy: d.strategy || 'MODEL'
+    });
     // Log resting depth for this decision. Fire-and-forget: never awaited, because an HTTP request
     // inside the pass ages every coin behind it. See src/depth.js — it is the last untested hypothesis
     // and it cannot be backtested, so the sample has to start somewhere.
@@ -1799,6 +1854,8 @@ async function runOnce() {
   // Stamped at the END, so the panel's Scanner line means "a pass finished" rather than "a pass
   // started" — a loop that wedges mid-pass must show as stale, not as healthy.
   stats.lastPass = new Date().toISOString();
+  stats.passMs = stats.passStartedAt ? Date.now() - stats.passStartedAt : null;
+  stats.busy = false;
 }
 
 /**
