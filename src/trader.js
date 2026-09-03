@@ -387,7 +387,10 @@ let timer = null;
  */
 const stats = {
   passes: 0, decisions: 0, entries: 0, skips: {}, lastPass: null, lastError: null,
-  watch: {}, busy: false, passMs: null, passStartedAt: null
+  watch: {}, busy: false, passMs: null, passStartedAt: null,
+  // Account-level refusals by code. Separate from `skips` as well as inside it, so the page can ask "did
+  // the accounts refuse anything" without unpicking the gate reasons from the same histogram.
+  accountBlocks: {}
 };
 
 /**
@@ -397,6 +400,41 @@ const stats = {
  * silently stops appearing is exactly the failure the strip exists to make visible. A missing row is
  * information; a stale row pretending to be current is not, so `at` is always stamped.
  */
+/**
+ * Turn an account-level refusal into a short countable code.
+ *
+ * ── why this exists ──
+ *
+ * noteSkip() was only ever called for GATE refusals — too-dear, off-band, no-window. Everything an ACCOUNT
+ * refuses (no key, no access, insufficient funds, at the open-position limit, daily stop, armed with
+ * nothing to spend) pushed an activity row and was counted nowhere. So the panel's "why rounds were
+ * declined" histogram could show thousands of market reasons while every single qualifying signal was
+ * being thrown away by one account problem, and the page had no way to say so.
+ *
+ * That is the difference between "the market never offered anything" and "the market offered plenty and
+ * your account refused all of it" — and from the outside both look identical: zero trades.
+ *
+ * The CODE is safe to publish; the sentence is not. `r.why` carries balances ("only $2.10 is free"), which
+ * is account money and must stay behind the token — see src/privacy.js. Only the code and its count reach
+ * the open route.
+ */
+function classifyBlock(why) {
+  const w = String(why || '').toLowerCase();
+  if (!w) return 'account';
+  if (w.includes('no access key') || w.includes('access has expired')) return 'no-key';
+  if (w.includes('blocked by the owner')) return 'owner-block';
+  if (w.includes('is free') || w.includes('insufficient')) return 'no-funds';
+  if (w.includes('daily stop')) return 'daily-stop';
+  if (w.includes('at the') && w.includes('limit')) return 'max-open';
+  if (w.includes('same direction')) return 'same-window';
+  if (w.includes('already holding this round')) return 'holding-round';
+  if (w.includes('0 contracts') || w.includes('not set')) return 'size-zero';
+  if (w.includes('per-order cap')) return 'order-cap';
+  if (w.includes('armed')) return 'armed-no-paper';
+  if (w.includes('order rejected')) return 'rejected';
+  return 'account';
+}
+
 function noteWatch(sym, patch) {
   const prev = stats.watch[sym] || {};
   stats.watch[sym] = { sym, at: Date.now(), ...prev, ...patch };
@@ -1743,6 +1781,11 @@ async function runOnce() {
       return;
     }
     log(`    ${who}: skipped — ${r.why}`);
+    // Counted, not just logged. A refusal nobody counts is a refusal the panel cannot explain, and "zero
+    // trades with no reason on screen" has now cost two separate evenings.
+    const code = classifyBlock(r.why);
+    noteSkip('acct:' + code);
+    stats.accountBlocks[code] = (stats.accountBlocks[code] || 0) + 1;
     activity.push({ sym: coin.sym, kind: 'SKIP', reason: 'account', detail: `${who} — ${r.why}`, meta: { who } });
   };
 
@@ -1927,7 +1970,7 @@ module.exports = {
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
   // signalTracker is exported as a test seam: the assertion that a favourite skip leaves the model's
   // persistence watch untouched cannot be written without seeing it.
-  createSignalTracker, signalTracker, gateSignal, marketDiagnostics, diagnosticText,
+  createSignalTracker, signalTracker, gateSignal, classifyBlock, marketDiagnostics, diagnosticText,
   sharesFor,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
   SIGNAL_OBSERVE_CONF, SIGNAL_CONFIRM_MS,

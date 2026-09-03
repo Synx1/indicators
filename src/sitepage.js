@@ -92,6 +92,9 @@ h1{font-size:19px;font-weight:640;letter-spacing:-.015em}
   color:var(--faint);padding:5px 1px 0}
 
 /* one row per coin: which way it leans, how far from the band */
+.scanwhy{font-size:12.5px;color:var(--loss);padding:7px 1px 0;line-height:1.5}
+.scanwhy:empty{display:none}
+.scanwhy b{color:var(--loss)}
 .watch{margin-top:12px;display:grid;gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:7px;overflow:hidden}
 .wrow{display:grid;grid-template-columns:52px 62px 1fr 92px;align-items:center;gap:12px;
@@ -231,6 +234,7 @@ tbody tr:hover{background:#18202f}
     <div class=head id=winhead><b></b></div>
   </div>
   <div class=wintick><span id=winopen></span><span id=winclose></span></div>
+  <div class=scanwhy id=scanwhy></div>
   <div class=watch id=watch></div>
 </div>
 
@@ -1035,6 +1039,30 @@ function paintStrip(at) {
     Math.max(0, every - since).toFixed(1) + 's';
   const tn = $('scant');
   if (tn) tn.innerHTML = t;
+  // The one line that turns "nothing is trading" into a diagnosis. Only shown when accounts have actually
+  // refused something: a gate that never offered anything is a different problem and says so on its own.
+  const blocks = (sc.blocks || []).filter(b => b.n > 0);
+  const WORDS = {
+    'no-key': 'no access key on the account',
+    'owner-block': 'the owner has blocked the account',
+    'no-funds': 'not enough free cash for the order',
+    'daily-stop': 'the daily stop is hit',
+    'max-open': 'already at the open-position limit',
+    'same-window': 'same direction already open in that window',
+    'holding-round': 'already holding that round',
+    'size-zero': 'size works out to zero contracts',
+    'order-cap': 'over the per-order cost cap',
+    'armed-no-paper': 'armed, so blocked entries are not papered',
+    'rejected': 'Kalshi rejected the order',
+    'account': 'refused by the account'
+  };
+  writeIf('scanwhy', blocks.length
+    ? '<b>' + blocks[0].n + ' signal' + (blocks[0].n === 1 ? '' : 's') + ' refused</b> — ' +
+      (WORDS[blocks[0].code] || blocks[0].code) +
+      (blocks.length > 1 ? '. Also ' + blocks.slice(1, 3).map(b =>
+        (WORDS[b.code] || b.code) + ' (' + b.n + ')').join(', ') : '')
+    : '');
+
   const se = $('scanend');
   if (se) {
     se.textContent = inGate

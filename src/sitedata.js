@@ -196,6 +196,17 @@ function publicState() {
       busy: Boolean(trader && trader.busy),
       passMs: trader && trader.passMs != null ? trader.passMs : null,
       band: { lo: favourite.FAV_LO, hi: favourite.FAV_HI },
+      // ── did the ACCOUNTS refuse everything? ──
+      //
+      // The gate reasons and the account reasons answer different questions and used to be
+      // indistinguishable: both ended as "no trades". A page that can say "the gate offered 340 signals and
+      // every one was refused for no-funds" turns a silent evening into a one-line diagnosis.
+      //
+      // Codes only. The sentences behind them carry balances, which are account money and stay behind the
+      // token — see src/privacy.js.
+      blocks: Object.entries((trader && trader.accountBlocks) || {})
+        .map(([code, n]) => ({ code, n }))
+        .sort((a, b) => b.n - a.n),
       watch: gl.SYMS.map(sym => {
         const w = (trader && trader.watch && trader.watch[sym]) || null;
         if (!w) return { sym, on: gl.isEnabled(sym), seen: false };
