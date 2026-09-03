@@ -159,8 +159,31 @@ function createSignalTracker() {
 
 const signalTracker = createSignalTracker();
 
-/** Turn a fresh qualifying impulse into a visible skip until its direction has persisted. */
+/**
+ * Turn a fresh qualifying impulse into a visible skip until its direction has persisted.
+ *
+ * ── the favourite gate is exempt, and that is not a shortcut ──
+ *
+ * This exists because the model's direction comes out of a noisy z and flips between passes, so a fresh
+ * reading is not yet evidence. The favourite gate has no such problem: its "direction" is which side the
+ * order book is already charging 85-90c for, and the book does not flicker between UP and DOWN — it is the
+ * confirmation, not a candidate for it.
+ *
+ * Applying persistence to it was measured, and it is why the live bot took no trades. The watch is keyed by
+ * symbol and deleted on any pass that yields no observation, so an out-of-band poll destroys it — which
+ * means the dear side had to sit inside a five-cent band CONTINUOUSLY for sixty seconds before an order
+ * could go in. Over 13,269 markets that requirement keeps 33% of the signals (6,362 -> 2,068) and improves
+ * the edge by 0.43pp (1.55 -> 1.98). Losing two thirds of the trades to gain a fifth of the edge takes the
+ * total from $9,862 to $4,080 at 100 contracts. And the real live gate is stricter still than what could be
+ * measured from minute candles: sixty seconds checked every six seconds is ten consecutive in-band polls.
+ *
+ * The tracker is left completely untouched for these decisions rather than merely ignored, so that under
+ * STRATEGY=both a favourite skip cannot silently reset the model's watch and starve the other gate too.
+ */
 function gateSignal(coin, d, now = Date.now(), tracker = signalTracker) {
+  const isFav = d && (d.strategy === 'FAVOURITE' ||
+    (typeof d.skip === 'string' && d.skip.startsWith('fav-')));
+  if (isFav) return d;
   const seen = tracker.observe(coin && coin.sym, d && d.observation, now);
   if (!d || d.skip) return d;
   if (!seen.ready) {
@@ -1832,7 +1855,9 @@ module.exports = {
   start, stop, runOnce, decideFor, applyTo, placeEntry, settleEntry, claimBlock, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
-  createSignalTracker, gateSignal, marketDiagnostics, diagnosticText,
+  // signalTracker is exported as a test seam: the assertion that a favourite skip leaves the model's
+  // persistence watch untouched cannot be written without seeing it.
+  createSignalTracker, signalTracker, gateSignal, marketDiagnostics, diagnosticText,
   sharesFor,
   MIN_CONF, MIN_CONFIRM, MIN_PRICE, MAX_PRICE, MIN_MINUTES, MAX_MINUTES,
   SIGNAL_OBSERVE_CONF, SIGNAL_CONFIRM_MS,

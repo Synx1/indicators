@@ -148,6 +148,29 @@ require('../src/markets').init({ log: () => {} });
   eq(d.strategy, 'FAVOURITE', 'still the favourite gate');
   eq(d.spot, null, 'and it reports honestly that it had no spot');
 
+  /**
+   * The persistence gate must not apply here.
+   *
+   * gateSignal holds a model signal for 60 seconds before it may trade, because the model's direction
+   * flips between passes. The favourite gate's direction is which side the book charges 85-90c for, and
+   * the tracker deletes its watch on any pass without an observation — so applying persistence meant the
+   * dear side had to hold a five-cent band for a full minute straight, which is why the live bot took no
+   * trades at all. Measured over 13,269 markets it keeps 33% of signals to gain 0.43pp, taking the total
+   * from $9,862 to $4,080. This asserts the exemption, at the first sight of a signal, with no history.
+   */
+  SPOT_OK = true;
+  QUOTE = { yes_ask_dollars: '0.87', no_ask_dollars: '0.14', yes_bid_dollars: '0.86' };
+  const fresh = trader.gateSignal({ sym: 'BTC' }, await trader.decideFor(coin), Date.now());
+  ok(!fresh.skip, `a first-sight favourite signal is not held for persistence (got ${fresh.skip || ''})`);
+  eq(fresh.strategy, 'FAVOURITE', 'and it is still the favourite decision, not a rewritten one');
+
+  // A favourite SKIP must leave the model's watch alone, so that under STRATEGY=both an out-of-band poll
+  // cannot reset the persistence clock and starve the model gate as well.
+  const before = trader.signalTracker ? trader.signalTracker.size : null;
+  QUOTE = { yes_ask_dollars: '0.55', no_ask_dollars: '0.46', yes_bid_dollars: '0.54' };
+  trader.gateSignal({ sym: 'BTC' }, await trader.decideFor(coin), Date.now());
+  if (before != null) eq(trader.signalTracker.size, before, 'a fav skip does not touch the tracker');
+
   Module._load = origLoad;
   console.log(`PASS favourite gate — ${checks} checks`);
 })().catch(e => { console.error(e); process.exit(1); });
