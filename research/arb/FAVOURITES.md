@@ -165,3 +165,77 @@ More series was the one lever that improved the frontier rather than moving alon
 those seven would add trades with negative expectancy. What is left on a $50 account is the size dial, and
 the size dial turns against itself: the median session peaks at 12 contracts and falls after, because
 beyond that the account cannot survive its own losing streaks.
+
+---
+
+# ROI drift and earlier entries: tested, and the price wins
+
+The ask: stop using the price level as the signal, predict the drift instead, and enter earlier —
+25-80¢ rather than 85-90¢ — whenever the trajectory says the price is about to run up.
+
+Measured on 13,269 markets, 134,756 candidate entries at 25-80¢, T-13..T-3. Both sides, one entry per
+market, Kalshi's fee charged the way the exchange charges it.
+
+## The drift carries no information the price does not already have
+
+Holding the **price** fixed and varying the **slope**, the settlement edge does not move:
+
+| entry | falling hard | falling | flat | rising | rising hard |
+|---|---|---|---|---|---|
+| 25-40¢ | −3.37pp | −3.98pp | −5.24pp | −4.38pp | −4.74pp |
+| 40-55¢ | −2.38pp | −2.62pp | −3.52pp | −4.40pp | −3.47pp |
+| 55-70¢ | −1.29pp | −0.97pp | −0.62pp | −2.41pp | −2.33pp |
+| 70-80¢ | +0.07pp | +0.86pp | +1.53pp | −0.57pp | −1.06pp |
+
+No trend, and where there is any tilt it runs the wrong way — *rising* is slightly worse than *falling*
+in three of four bands.
+
+Nor does drift predict a run-up, which is the thing it was supposed to predict. Share of entries that
+ever offered entry+10¢ before the close, at 25-40¢: **65.9% falling hard, 64.4% rising.** Identical.
+
+**The Euler extrapolation is far worse than doing nothing.** Taking one step along the observed
+trajectory, `P(t+k) ≈ P(t) + k·dP/dt`, and scoring it as a probability forecast against "the price is the
+probability":
+
+- price as the forecast — Brier **0.219154**
+- one full Euler step to close — Brier 0.363043, **skill −65.66%**
+- half a step — Brier 0.309847, **skill −41.38%**
+
+Extrapolating the trajectory destroys the forecast. That is what happens when you add a momentum term to
+a martingale.
+
+## No take-profit works, at any target, from any entry band
+
+72 combinations: nine entry bands from 25-80¢ × eight exits from hold-to-settle to +30¢. **Every one is
+negative, and negative in both chronological halves.** The pattern says why:
+
+| 70-80¢ entry | hold | +3¢ | +5¢ | +10¢ | +20¢ | +30¢ |
+|---|---|---|---|---|---|---|
+| ROI | −1.11% | −7.20% | −6.99% | −6.10% | −2.99% | −1.58% |
+| fills | — | 92.2% | 90.0% | 85.1% | 78.0% | 75.1% |
+
+The nearer the target, the worse the result. A +3¢ sell on a 70¢ contract fills 92% of the time for 3¢ and
+forfeits the 30¢ upside on the ~72% that would have settled YES. Selling a 70% winner for three cents is
+the trade being proposed, and it is a bad one.
+
+## Why it cannot be fixed by a better filter
+
+The price on this market is a martingale — it is already a probability, and the corpus says the realised
+win rate equals it at every level. For a driftless walk with absorbing barriers, the chance of touching
+p+k before touching 0 is p/(p+k), which makes a take-profit exactly zero-expectancy before fees at every
+target. Observed fill rates sit ~8pp BELOW that value at every cell, which is what a *time-limited*
+martingale does — three to thirteen minutes is not unlimited time to reach a barrier.
+
+So the take-profit is worse than break-even before the fee is charged. And then the fee is charged twice:
+
+| entry | fee | as a share of the stake | round trip |
+|---|---|---|---|
+| 25¢ | 1.31pp | 5.25% | 2.63pp |
+| 50¢ | 1.75pp | 3.50% | 3.50pp |
+| 80¢ | 1.12pp | 1.40% | 2.24pp |
+| **87¢** | **0.79pp** | **0.91%** | **1.58pp** |
+
+**Earlier entries are the most expensive place on the price line to trade.** 0.07·p·(1−p) peaks at 50¢.
+The 25-80¢ band asks for a bigger edge than 85-90¢ does, while the measurements say there is less edge
+there, not more. That is the whole reason the surviving strategy sits at 87¢: not because favourites are
+special, but because the toll is smallest there and a small real bias can clear it.
