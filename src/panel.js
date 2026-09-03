@@ -252,11 +252,22 @@ function statusLine(t) {
     return { badge: '🔴', title: 'Live and armed', colour: 0x4ade80,
       text: 'the next qualifying signal buys with real money.' };
   }
+  // ── the title names what happens to the NEXT signal, not what the user selected ──
+  //
+  // This used to read "Live, not trading". The leading word was "Live", so the panel appeared to confirm
+  // that pressing Go live had worked, and then paper fills arrived — reported in exactly those words:
+  // "when I click LIVE and I don't arm it it's also PAPER, very confusing". The state was correct and the
+  // label was lying about it. Real money needs BOTH the mode and the arm, and until both are set the
+  // honest description of this account is Paper, whatever was selected.
+  //
+  // Still amber rather than the plain paper blue, because this is not the same as paper by choice — there
+  // is one press left to make it real, and the colour is what says so.
+  const why = block === 'not armed'
+    ? 'real money is selected but **not armed**, so the next signal still fills as paper.'
+    : `${block} — so signals are **still filling as paper**.`;
   return {
-    badge: '🟡', title: 'Live, not trading', colour: 0xfbbf24,
-    // Names the consequence, not just the condition. "not armed" is a state; "still filling as
-    // paper" is what it MEANS, and that is the sentence somebody needs.
-    text: `${block} — so signals are **still filling as paper**. Press **Arm** to trade for real.`
+    badge: '📝', title: 'Paper — not armed', colour: 0xfbbf24,
+    text: `${why} Press **Arm** to trade for real.`
   };
 }
 
@@ -548,8 +559,14 @@ function mainComponents(t) {
       // An unapproved account cannot arm at all: the trader would refuse every entry anyway, and a
       // button that appears to work while changing nothing is worse than one that is plainly off.
       .setDisabled((!keyed && !armed) || !approved),
+    // ── "Go live" promised something it could not deliver ──
+    //
+    // This button only SELECTS which money the account will use; the Arm button is what starts using it.
+    // Labelled "Go live" it read as the whole action, so pressing it and then getting paper fills looked
+    // like a bug rather than a missing second step. "Use real money" describes choosing a mode, which
+    // leaves Arm as the obvious trigger.
     new ButtonBuilder().setCustomId(`${ID}:live`)
-      .setLabel(live ? 'Go paper' : 'Go live')
+      .setLabel(live ? 'Back to paper' : 'Use real money')
       .setStyle(live ? ButtonStyle.Secondary : ButtonStyle.Primary)
       .setDisabled(!approved),
     new ButtonBuilder().setCustomId(`${ID}:refresh`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)

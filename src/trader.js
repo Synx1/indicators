@@ -1118,7 +1118,7 @@ function paperFill({ askNowCents, limitCents, quotedCents }) {
  * those words. So armed is the one state where a blocked entry is skipped and says why.
  *
  * Live-but-not-armed still fills paper, because that is what the panel promises out loud when you
- * press Go live: "signals will keep filling as paper until you press Arm".
+ * select real money: "signals will keep filling as paper until you press Arm".
  */
 function paperAllowed(t) {
   return !(t.get('live') && t.get('armed'));

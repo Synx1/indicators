@@ -143,8 +143,17 @@ function base(colour, title, sub) {
  * small position it is a real share of the trade — 3¢ on $4.50 is 0.7% before the market moves.
  */
 async function entry(t, p, { live }) {
+  // ── why a paper fill landed on an account that selected real money ──
+  //
+  // Selecting live and not arming produces paper fills, which is correct and was still confusing: the
+  // account says live, a trade notification arrives, and nothing in it explains that no order was sent.
+  // So the header says it. An account in paper BY CHOICE does not need the sentence and does not get it.
+  // Guarded rather than assumed: this file must never be the thing that throws. A notification path that
+  // can fail on a missing field takes the trade record down with it — the DM is the least important thing
+  // in the pass and must behave that way.
+  const wantedLive = !live && t && typeof t.get === 'function' && t.get('live') === true;
   const e = base(live ? 0xf87171 : 0x5b9dff,
-    `🟢 Trade Taken   ·   ${live ? '🔴 Live' : '📝 Paper'}`,
+    `🟢 Trade Taken   ·   ${live ? '🔴 Live' : wantedLive ? '📝 Paper — not armed' : '📝 Paper'}`,
     `**${p.sym} ${arrow(p.direction)}**   ·   model ${p.confidence}% · book ${bookPct(p.price)} · ${p.confirm}/4`);
   e.addFields({
     name: '​',
@@ -152,6 +161,10 @@ async function entry(t, p, { live }) {
       `**${p.contracts} shares @ ${cents(p.price)}**`,
       `cost ${money(p.cost)}   ·   fee ${money(p.entryFee)}   ·   total ${money(p.total)}`,
       `📖 Read: ${readOf(p.style)}`,
+      ...(wantedLive
+        ? ['⚠️ _No order was sent. Real money is selected but the account is not armed, so this was ' +
+           'recorded as paper. Press **Arm** on /dashboard to trade for real._']
+        : []),
       `_The model says ${p.confidence}%; the price says ${bookPct(p.price)}. The gap IS the bet. Measured over ` +
         `68 days the price is the better forecast where the two disagree — read the book number as the honest one._`
     ].join('\n'),
@@ -223,7 +236,8 @@ async function enabled(t) {
   e.addFields({
     name: '​',
     value: 'It starts as **paper** — real bookkeeping on real prices, no order sent. To trade real ' +
-      'money you also need to import a Kalshi key, press **Go live**, and then **Arm**.\n\n' +
+      'money you also need to import a Kalshi key, press **Use real money**, and then **Arm**. Both ' +
+      'steps are needed — selecting real money on its own still fills as paper.\n\n' +
       'Run `/dashboard` to see it.',
     inline: false
   });

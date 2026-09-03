@@ -624,7 +624,7 @@ function renderSetup(d, pub) {
     const s = a.summary;
     const head = '<div class=note style="margin:0 0 14px"><b>' + esc(a.who) + '</b> ' +
       '<span class="pill ' + (a.live ? (a.armed ? 'live' : '') : 'paper') + '">' +
-      (a.live ? (a.armed ? 'armed' : 'live, not armed') : 'paper') + '</span> · bankroll ' +
+      (a.live ? (a.armed ? 'armed' : 'paper, not armed') : 'paper') + '</span>  bankroll ' +
       (a.bankroll == null ? '<span class=warn>not set</span>' : money(a.bankroll)) + ' · ' +
       (a.attention
         ? '<b class=down>' + a.attention + ' setting' + (a.attention === 1 ? '' : 's') + ' to change</b>'

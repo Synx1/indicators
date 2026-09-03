@@ -38,3 +38,37 @@ yes(true, false, 'live on but not armed: paper, as the panel says');
 no(true, true, 'live and armed: no paper fills at all');
 
 console.log(`PASS paper-gate — ${checks} assertions (paper stops only when armed)`);
+
+/**
+ * ── the state must not call itself Live ──
+ *
+ * paperAllowed(true, false) is true, which is correct: selecting real money without arming still fills as
+ * paper. The panel used to title that state "Live, not trading", leading with the word Live, so it read as
+ * confirmation that real trading had started — and then paper fills arrived. Reported in exactly those
+ * words: "when I click LIVE and I don't arm it it's also PAPER, very confusing".
+ *
+ * The behaviour was right and the label was lying about it. This pins the label: whenever the next signal
+ * will fill as paper, the state's title must SAY paper, whatever the user selected.
+ */
+const panel = require('../src/panel');
+if (typeof panel.statusLine === 'function') {
+  const fake = (live, armed) => ({
+    get: k => ({ live, armed, dailyStopLoss: null })[k],
+    hasAccess: () => true,
+    liveBlock: () => (!live ? 'live mode is off' : !armed ? 'not armed' : null),
+    rec: { blocked: false, accessUntil: new Date(Date.now() + 8.64e7).toISOString(),
+           settings: { live, armed, dailyStopLoss: null }, day: {} },
+    day: () => ({ live: 0 })
+  });
+  const mid = panel.statusLine(fake(true, false));
+  assert.ok(/^Paper/i.test(mid.title),
+    'real money selected but not armed must be titled Paper, not Live — got: ' + mid.title);
+  assert.ok(/not armed/i.test(mid.text) && /paper/i.test(mid.text),
+    'and the body must say both that it is not armed and that fills are paper');
+  const real = panel.statusLine(fake(true, true));
+  assert.ok(/live/i.test(real.title), 'armed and live is the only state allowed to call itself live');
+  checks += 3;
+  console.log(`PASS paper-gate labels — 3 more assertions (${checks} total)`);
+} else {
+  console.log('note: panel.statusLine is not exported, label assertions skipped');
+}
