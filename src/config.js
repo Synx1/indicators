@@ -174,12 +174,25 @@ module.exports = {
   // original spot-vs-strike read with four indicators confirming (src/decide.js); 'both' runs the
   // favourite gate first and falls back to the model when it does not fire.
   //
-  // The default is 'favourite' because the model gate was measured over 68 days and 45,030 settled
-  // markets and is fairly priced — its realised win rate equals the price it pays, so the fee is the
-  // whole result. The favourite gate is the one configuration that earned above its own break-even on
-  // data that had no part in choosing it. Changing the default cannot move real money by itself:
-  // `armed` is forced false on every startup, so live trading still needs somebody to arm it.
-  STRATEGY: (process.env.STRATEGY || 'favourite').toLowerCase(),
+  // The model gate was measured over 68 days and 45,030 settled markets and is fairly priced — its
+  // realised win rate equals the price it pays, so the fee is the whole result. Favourite briefly held
+  // this default as the one configuration that had earned above its own break-even on data that had no
+  // part in choosing it; that no longer holds, because it failed its matched forward audit and is now
+  // suspended. Changing this default cannot move real money by itself: `armed` is forced false on every
+  // startup, so live trading still needs somebody to arm it, and calibration additionally refuses live.
+  /**
+   * Which gate decides entries. An explicit STRATEGY env var always wins; this is only the default.
+   *
+   * It defaults to `calibration` because `favourite` is SUSPENDED: FAV_FORWARD_READY is false, so
+   * accountBlock refuses every favourite entry in both books. Left on that default the bot boots
+   * healthy, scans, logs, and takes zero trades forever — safe, but silent in the worst way, because
+   * nothing about a running process says "this gate can never fill".
+   *
+   * `calibration` is the gate with current forward evidence, and it is paper-only: CAL_LIVE_READY is
+   * false and enforced in accountBlock and again in placeEntry, so this default cannot put real money
+   * at risk. Set STRATEGY=model or STRATEGY=favourite explicitly to override.
+   */
+  STRATEGY: (process.env.STRATEGY || 'calibration').toLowerCase(),
 
   // ── web ──
   PORT: Number(process.env.PORT || 3000),
