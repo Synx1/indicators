@@ -30,13 +30,17 @@ module.exports = function page() {
    used green for both "scanner healthy" and "made a profit", so a green dot and a green number meant
    unrelated things and the eye had to read the label to know which. */
 :root{
-  --ground:#0e1420; --raised:#151d2c; --sunk:#0b1017;
-  --rule:#232d43; --rule2:#31405e;
-  --tx:#dde3f0; --muted:#7a8599; --faint:#57617a;
+  --ground:#0b1017; --raised:#141b28; --raised2:#1a2333; --sunk:#080c12;
+  --rule:#1f2939; --rule2:#2c3a52;
+  --tx:#e6ebf5; --muted:#8b95a8; --faint:#5d6779;
   --live:#f2a63b; --gain:#46d391; --loss:#f2695f;
   --up:#46d391; --down:#f2695f; --warn:#f2a63b; --accent:#7fa6ff;
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
-  --r:10px;
+  --r:12px;
+  /* Depth comes from ONE shared shadow plus a hairline rather than a border colour per block.
+     Competing border colours are what made the surfaces read as separate patches. */
+  --lift:0 1px 2px rgba(0,0,0,.32), 0 8px 24px -12px rgba(0,0,0,.5);
+  --hair:inset 0 0 0 1px rgba(255,255,255,.045);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scrollbar-gutter:stable}
@@ -213,6 +217,27 @@ tbody tr:hover{background:#18202f}
 @media(prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
+
+/* ── surface polish ──
+   Appended last so it layers over the sheet above without renaming a single class. Every selector
+   targets a block that already exists; no markup or behaviour changes. */
+.hero,.mkt,.gate,.readout,.chartwrap,.coinbar,.legend{
+  background:linear-gradient(180deg,var(--raised2) 0%,var(--raised) 100%);
+  border-radius:var(--r);box-shadow:var(--lift),var(--hair);border:0}
+.head,.scanhead{letter-spacing:.02em;text-transform:uppercase;font-size:11px;
+  font-weight:650;color:var(--faint)}
+.cell{border-radius:calc(var(--r) - 4px)}
+.cell .k,.lbl{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--faint)}
+.num,.money{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.pill{border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.track,.bar,.bars,.fill{border-radius:999px}
+th{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--faint);font-weight:650}
+tbody tr:hover{background:rgba(127,166,255,.05)}
+.note,.scanwhy{color:var(--muted);line-height:1.5}
+.empty{color:var(--faint);text-align:center;padding:22px 12px}
+/* The heartbeat is decoration; the numbers are the content. */
+@media (prefers-reduced-motion:reduce){.dot.beat{animation:none}}
 </style></head><body><div class=wrap>
 
 <header>

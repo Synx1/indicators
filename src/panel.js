@@ -28,7 +28,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags
 } = require('discord.js');
 
-const { OWNER_ID, INSTANCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT } = require('./config');
+const { OWNER_ID, INSTANCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, STRATEGY } = require('./config');
 const settings = require('./settings');
 const users = require('./users');
 const book = require('./book');
@@ -98,9 +98,19 @@ function scannerLine() {
 // Kept in step with src/trader.js MIN_PRICE, which is the source of truth. Raised 0.25 -> 0.35 on
 // 2026-08-31: a 25c contract the model calls 85% is a 60-point disagreement with the market, and
 // the corpus says that is where the model is wrong rather than where the edge is.
-const BAND_LO = 0.35;
-// Kept in step with src/trader.js MAX_PRICE, which is the source of truth for the entry band.
-const BAND_HI = 0.65;
+//
+// These MUST track the active gate. Left at the model's 0.35-0.65 they silently mis-serve every other
+// strategy: auto size divides the risk budget by BAND_HI, so under STRATEGY=calibration a 0.65 ceiling
+// sizes each trade ~48% larger than the risk dial asks for, and the affordability check then clears an
+// order the account cannot actually fund at 95c. Favourite buys 85-90c; calibration buys 75-95c and may
+// pay one cent of grace on top, so its true ceiling is 0.96.
+//
+// Affordability bounds only — src/favourite.js, src/calibration.js and src/trader.js remain the
+// strategy sources of truth.
+const CAL_ACTIVE = STRATEGY === 'calibration' || STRATEGY === 'calibration+model';
+const BAND_LO = STRATEGY === 'favourite' ? 0.85 : (CAL_ACTIVE ? 0.75 : 0.35);
+// Kept in step with src/trader.js MAX_PRICE, which is the source of truth for the model entry band.
+const BAND_HI = STRATEGY === 'model' ? 0.65 : (CAL_ACTIVE ? 0.96 : 0.90);
 /**
  * The exchange shard the 15-minute crypto markets live on.
  *

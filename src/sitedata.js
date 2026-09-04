@@ -29,7 +29,7 @@ const series = require('./series');
 const activity = require('./activity');
 const favourite = require('./favourite');
 const {
-  WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE
+  WEB_TOKEN, DATA_DIR, DATA_DIR_SOURCE, KEY_DIR_SOURCE, KEY_DIR_PERSISTENT, INSTANCE, STRATEGY
 } = require('./config');
 
 const NAME = 'Indicators';
@@ -497,7 +497,53 @@ function recommendations() {
         fillGrace: t.get('fillGrace'), cashoutAt: t.get('cashoutAt'),
         downWarn: warn
       };
-      const rows = recommend.review(snap);
+      // recommend.js is calibrated to the 35-65c MODEL gate: its prose quotes a 59c entry, a 73% live
+      // rate and a 25pp margin. Showing that for the calibration gate, which buys 75-95c favourites
+      // with a ~4pp edge over the book, is not conservative — it describes a different payoff and a
+      // different win rate, so an operator reading it would size and expect the wrong thing.
+      /**
+       * One card per GATE, chosen by the gate that is actually running.
+       *
+       * recommend.js is calibrated to the 35-65c MODEL band: its prose quotes a 59c entry, a 73% live
+       * rate and a 25pp margin. Showing that for a 75-95c calibration entry, or for a suspended
+       * favourite, describes a payoff the account will never see. Equally, showing the favourite
+       * suspension notice while calibration is running claims entries are blocked when calibration is
+       * deliberately paper-ENABLED — the operator would read the exact opposite of the truth.
+       */
+      const calibrationActive = STRATEGY === 'calibration' || STRATEGY === 'calibration+model';
+      const modelActive = STRATEGY === 'model';
+      const calibrationRow = {
+        key: 'strategyValidation', label: 'Strategy validation',
+        current: live && snap.armed ? 'live armed; entries refused' : 'paper only',
+        recommended: 'paper only', ok: !(live && snap.armed),
+        severity: live && snap.armed ? 'high' : 'note',
+        why: 'The calibration gate buys whichever side the book has priced 75-95c, where the market ' +
+          'underprices heavy favourites by about 4pp. Paper entries are ENABLED so forward evidence ' +
+          'accumulates; live money is refused in accountBlock and again in placeEntry. The ' +
+          'expanding-day walk-forward is +3.9% fee-adjusted with a day-clustered lower bound of ' +
+          '+2.1pp at a perfect fill, but only about +1.0% once a single cent of slippage is paid, and ' +
+          'signals arrive correlated across all seven coins, so the effective sample is far smaller ' +
+          'than the trade count suggests.',
+        note: 'Re-enable live only on a forward interval whose lower bound is above zero measured on ' +
+          'independent settlement WINDOWS, not on correlated individual trades. The 10-25c DOWN mirror ' +
+          'is already disabled after taking 71% of capacity at a 71.4% win rate for -12% ROI.'
+      };
+      const favouriteRow = {
+        key: 'strategyValidation', label: 'Strategy validation',
+        current: snap.armed ? 'armed; entries blocked' : 'entries suspended',
+        recommended: 'observe only', ok: !snap.armed,
+        severity: snap.armed ? 'high' : 'note',
+        why: 'Execution refuses Favourite entries in both paper and live books. Two forward samples, ' +
+          're-scored on historical one-minute closes with the production correlation guard, are 8/11 ' +
+          'and -16.76% after fees; first-sight and every pre-declared persistence challenger are ' +
+          'negative. The dedicated public-data shadow continues observing without adding account ' +
+          'exposure.',
+        note: 'The configuration is reversible only after a challenger earns positive forward ' +
+          'evidence; position sizing cannot turn an uncertain signal into positive expected value.'
+      };
+      const rows = modelActive
+        ? recommend.review(snap)
+        : [calibrationActive ? calibrationRow : favouriteRow];
       return {
         who: snap.who, live, armed: snap.armed, bankroll,
         mode: live ? 'live' : 'paper',
