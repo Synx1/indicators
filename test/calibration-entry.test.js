@@ -34,6 +34,23 @@ let checks = 0;
 const ok = (c, m) => { checks++; assert.ok(c, m); };
 const eq = (a, b, m) => { checks++; assert.deepStrictEqual(a, b, m); };
 
+/**
+ * The clock is FROZEN, and it has to be.
+ *
+ * The gate excludes 07:00 and 08:00 ET closes, and this test builds a market closing nine minutes from
+ * now. Against the wall clock it therefore passed 22 hours a day and failed during those two — worse
+ * than no test, because the one time it goes red everybody blames the clock instead of reading it. It
+ * caught itself twice: once at 08:00 ET when the session gate first landed, and again after a branch
+ * rebuild silently dropped this guard.
+ *
+ * 17:00Z is 13:00 ET under daylight saving, so a close nine minutes out lands at 13:09 ET: inside the
+ * decision band, outside the excluded hours, and independent of when the suite runs. The excluded hours
+ * keep their own explicit coverage in test/calibration.test.js.
+ */
+const FROZEN_NOW = Date.parse('2026-09-04T17:00:00Z');
+const realNow = Date.now;
+Date.now = () => FROZEN_NOW;
+
 // One round, nine minutes out, YES quoted 0.84/0.85 — inside 75-90c with a 1c spread, so it qualifies.
 let QUOTE = { yes_ask_dollars: '0.85', no_ask_dollars: '0.16', yes_bid_dollars: '0.84' };
 let MINUTES_OUT = 9;
@@ -165,9 +182,11 @@ users.init({ log: () => {} });
   const wide = await trader.decideFor(coin);
   eq(wide.skip, 'cal-wide-spread', `a 5c spread is refused (got ${wide.skip})`);
 
+  Date.now = realNow;
   fs.rmSync(DIR, { recursive: true, force: true });
   console.log(`PASS calibration entry path — ${checks} checks`);
 })().catch(error => {
+  Date.now = realNow;
   fs.rmSync(DIR, { recursive: true, force: true });
   console.error(error);
   process.exitCode = 1;
