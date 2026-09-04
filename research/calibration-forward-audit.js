@@ -113,6 +113,29 @@ function violations(p) {
 /** ROI on stake for one trade. Stake is what was actually risked, so cost, not notional. */
 const roiOf = p => (p.cost > 0 ? p.pnl / p.cost : null);
 
+/**
+ * Day-clustered 95% CI on mean per-trade ROI.
+ *
+ * `dayClusteredMeanCI` takes a FLAT trade list and resamples whole DAYS, reading `.day` and
+ * `.pnlPerContract` off each element, and it returns `{low, high}`. Handing it an array of per-day
+ * arrays instead silently yields NaN: `trade.day` is undefined so every row collapses into one group,
+ * and `trade.pnlPerContract` is undefined so the bootstrap means are NaN. It does not throw, and NaN
+ * fails the `> 0` guard, so the bug reads as a safely-negative verdict rather than as a broken
+ * computation. That is exactly why it is isolated here and tested.
+ *
+ * ROI is passed in the `pnlPerContract` field deliberately: the function bootstraps the mean of
+ * whatever that field holds, and ROI is the unit the incumbent interval is quoted in.
+ */
+function roiCI(rows) {
+  const usable = rows
+    .map(p => ({ day: etDay(p.closeMs || Date.parse(p.closeTime || '') || 0), roi: roiOf(p) }))
+    .filter(x => x.roi != null && Number.isFinite(x.roi));
+  const days = new Set(usable.map(x => x.day));
+  if (days.size < 2) return { low: null, high: null, days: days.size };
+  const ci = dayClusteredMeanCI(usable.map(x => ({ day: x.day, pnlPerContract: x.roi })));
+  return { low: ci.low, high: ci.high, days: days.size };
+}
+
 function summarize(rows) {
   const n = rows.length;
   if (!n) return null;
@@ -199,27 +222,13 @@ function main() {
 
   // Day-clustered CI on per-trade ROI. Clustering by settlement day is the same treatment the
   // historical estimate got, so the two numbers are comparable rather than merely adjacent.
-  const byDay = new Map();
-  for (const p of rows) {
-    const ms = p.closeMs || Date.parse(p.closeTime || '') || null;
-    const k = ms ? etDay(ms) : 'unknown';
-    if (!byDay.has(k)) byDay.set(k, []);
-    const r = roiOf(p);
-    if (r != null) byDay.get(k).push(r);
-  }
-  console.log(`  settlement days: ${byDay.size}`);
-  if (byDay.size >= 2) {
-    try {
-      const ci = dayClusteredMeanCI([...byDay.values()]);
-      const lo = (ci.lo != null ? ci.lo : ci.lower) * 100;
-      const hi = (ci.hi != null ? ci.hi : ci.upper) * 100;
-      console.log(`  day-clustered 95% CI on ROI: [${fmtPct(lo)}, ${fmtPct(hi)}]`);
-      console.log(lo > 0
-        ? '  lower bound is ABOVE ZERO — this is the shape the live-money bar asks for.'
-        : '  lower bound includes zero — NOT sufficient for live money. Keep CAL_LIVE_READY=false.');
-    } catch (e) {
-      console.log(`  day-clustered CI unavailable: ${e.message}`);
-    }
+  const ci = roiCI(rows);
+  console.log(`  settlement days: ${ci.days}`);
+  if (ci.low != null && Number.isFinite(ci.low)) {
+    console.log(`  day-clustered 95% CI on ROI: [${fmtPct(ci.low * 100)}, ${fmtPct(ci.high * 100)}]`);
+    console.log(ci.low > 0
+      ? '  lower bound is ABOVE ZERO — this is the shape the live-money bar asks for.'
+      : '  lower bound includes zero — NOT sufficient for live money. Keep CAL_LIVE_READY=false.');
   } else {
     console.log('  fewer than 2 settlement days — a day-clustered interval is not defined yet,');
     console.log('  so no forward interval exists and CAL_LIVE_READY must stay false.');
@@ -280,7 +289,7 @@ function main() {
   else if (auditable === 0) {
     console.log('VERDICT: unverifiable. No settled trade carries the gate\'s inputs, so compliance is');
     console.log('  unknown rather than confirmed. Re-run once trades settle on the current code.');
-  } else if (byDay.size < 2) console.log('VERDICT: compliant, sample too small for any forward inference.');
+  } else if (ci.days < 2) console.log('VERDICT: compliant, sample too small for any forward inference.');
   else console.log('VERDICT: compliant. Read the day-clustered interval above, not the raw ROI.');
 }
 
@@ -288,4 +297,4 @@ if (require.main === module) {
   try { main(); } catch (e) { console.error(e.message); process.exitCode = 1; }
 }
 
-module.exports = { violations, windowKey, settledTrades, summarize, roiOf, etHour, etDay };
+module.exports = { violations, windowKey, settledTrades, summarize, roiOf, roiCI, etHour, etDay };

@@ -90,7 +90,40 @@ ok(Math.abs(s.realizedMinusImpliedPp - (-30)) < 1e-9, 'forward bias is realized 
 // 9. roiOf refuses to divide by a zero stake rather than returning Infinity
 eq(audit.roiOf({ cost: 0, pnl: 5 }), null, 'a zero-cost position yields no ROI');
 
-// 10. the checker reads its thresholds from the gate, so tightening the gate tightens the audit
+// 10. the day-clustered CI returns a FINITE interval across two settlement days.
+//
+// This is the assertion that catches the shape bug. dayClusteredMeanCI reads `.day` and
+// `.pnlPerContract` off a FLAT list and returns {low, high}; handing it an array of per-day arrays
+// silently produces NaN instead of throwing, and NaN fails a `> 0` guard, so the failure disguises
+// itself as a safely-negative verdict. Asserting only "does not throw" would pass on the bug.
+const twoDays = [
+  { cost: 20, pnl: 4, closeTime: '2026-09-04T17:00:00Z', closeMs: Date.parse('2026-09-04T17:00:00Z') },
+  { cost: 20, pnl: 5, closeTime: '2026-09-04T18:00:00Z', closeMs: Date.parse('2026-09-04T18:00:00Z') },
+  { cost: 20, pnl: 3, closeTime: '2026-09-05T17:00:00Z', closeMs: Date.parse('2026-09-05T17:00:00Z') },
+  { cost: 20, pnl: 6, closeTime: '2026-09-05T18:00:00Z', closeMs: Date.parse('2026-09-05T18:00:00Z') }
+];
+const ci = audit.roiCI(twoDays);
+eq(ci.days, 2, 'two distinct ET settlement days are counted');
+ok(Number.isFinite(ci.low) && Number.isFinite(ci.high),
+  `the interval is finite, not NaN (got [${ci.low}, ${ci.high}])`);
+ok(ci.low <= ci.high, 'the interval is ordered');
+// Every trade here is profitable, so a bootstrap over these days cannot straddle zero.
+ok(ci.low > 0, `an all-profitable sample yields a positive lower bound (got ${ci.low})`);
+// Mean ROI is (0.20+0.25+0.15+0.30)/4 = 0.225, and the bootstrap mean must bracket it.
+ok(ci.low <= 0.225 && 0.225 <= ci.high, 'the interval brackets the sample mean ROI');
+
+// A single day gives no interval rather than a fake one.
+const oneDay = audit.roiCI(twoDays.slice(0, 2));
+eq(oneDay.days, 1, 'one day is reported as one day');
+eq(oneDay.low, null, 'a single day yields no lower bound');
+
+// An all-losing sample must produce a NEGATIVE upper bound -- the direction matters, because this is
+// the number that would justify calling a config failed.
+const losing = twoDays.map((p, i) => ({ ...p, pnl: -20 - i * 0.1 }));
+const lci = audit.roiCI(losing);
+ok(lci.high < 0, `an all-losing sample yields a negative upper bound (got ${lci.high})`);
+
+// 11. the checker reads its thresholds from the gate, so tightening the gate tightens the audit
 ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS }).length === 0,
   'a spread exactly at the gate is allowed');
 ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS + 0.01 })
