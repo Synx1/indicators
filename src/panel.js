@@ -60,6 +60,34 @@ function table(rows, { width } = {}) {
   return '```\n' + visible.map(([k, v]) => `${String(k).padEnd(w)}  ${v}`).join('\n') + '\n```';
 }
 
+/**
+ * ── how this embed is laid out, and why ──
+ *
+ * Discord renders up to THREE inline fields across one row, and stacks every non-inline field at full
+ * width. This panel used to set inline:false on everything, so a dozen short numbers each claimed a
+ * whole row and the result read as one ragged column you had to scan top-to-bottom to find a figure.
+ * Long warning sentences were also wedged inside monospace code-block tables, where they wrap at the
+ * block width and destroy the column alignment that was the only reason to use a table.
+ *
+ * Three shapes now, each with one job:
+ *   cell()    - a SHORT number in the three-across grid, with an optional short second line.
+ *   divider() - a bold section label on its own row, so sections read as sections.
+ *   table()   - genuinely tabular rows only (open positions, key details), cells kept short.
+ * Anything that is a sentence goes in prose() at full width, never in a cell or a table row.
+ */
+const ZWSP = '\u200b';
+const cell = (name, value, sub) => ({
+  name, value: sub ? `${value}\n\`${sub}\`` : String(value), inline: true
+});
+const divider = label => ({ name: ZWSP, value: `**${label}**`, inline: false });
+const prose = text => ({ name: ZWSP, value: text, inline: false });
+/** Pad a short row so its columns still line up with the rows above. */
+const padGrid = cells => {
+  const out = cells.filter(Boolean);
+  while (out.length % 3 !== 0) out.push({ name: ZWSP, value: ZWSP, inline: true });
+  return out;
+};
+
 /** A small bar, for a share of something. Reads faster than a percentage. */
 function bar(frac, slots = 12) {
   const n = Math.max(0, Math.min(slots, Math.round((Number(frac) || 0) * slots)));
@@ -342,22 +370,48 @@ async function mainPayload(t) {
   const shardCash = live && bal.shards ? Number(bal.shards[String(CRYPTO_SHARD)]) : null;
   const shardShort = shardCash != null && bal.dollars != null &&
     (bal.dollars - shardCash) > 1 && shardCash < BAND_LO;
-  e.addFields({
-    name: 'Balance',
-    value: table([
-      ['Equity', money(shown) + (capped ? `   (capped by your ${money(ceiling)} balance)` : '')],
-      ['Started at', money(eq.start)],
-      ['Realised', signed(eq.realised)],
-      shardShort && ['Usable here', `${money(shardCash)}   ⚠️ crypto trades on shard ` +
-        `${CRYPTO_SHARD}; the rest of your balance is on another shard and cannot back an order`],
-      // Their own clock, on the screen they already look at. A subscription that expires silently
-      // looks exactly like a bot that stopped working.
-      accessRow(t),
-      eq.atRisk > 0 && ['Committed', `${money(eq.atRisk)} in ${open.length} open`],
-      eq.atRisk > 0 && ['Free to bet', money(eq.free)]
-    ]),
-    inline: false
-  });
+  // ── the headline: the three numbers somebody opened the panel to find ──
+  //
+  // Equity, today, all time — for the book this account is actually using. Everything else is detail
+  // and lives below a divider. Today sits BESIDE all time rather than replacing it, because a book at
+  // +$5 that was once +$60 is a different situation from one that climbed steadily to +$5, and a
+  // single total reports them identically.
+  // ── which book is ACTUALLY in use, not which one was selected ──
+  //
+  // `live` is only the mode switch. Real money needs the mode AND the arm — paperAllowed() is
+  // !(live && armed) — so an account with live selected but not armed still fills as paper. Keying the
+  // headline off `live` alone showed the LIVE book's history above a description reading "Paper — not
+  // armed": nineteen closed trades and an 89.5% win rate that had nothing to do with what the next
+  // signal will do. This is the same trap the perfField comment below was written about.
+  const usingLive = live === true && armed === true;
+  const headCurve = usingLive ? liveEq : paperEq;
+  const headSt = usingLive ? liveSt : paperSt;
+  e.addFields(...padGrid([
+    cell('Equity', money(shown),
+      eq.atRisk > 0 ? `${money(eq.free)} free` : `from ${money(eq.start)}`),
+    cell('Today', headCurve.todayN ? signed(headCurve.todayNet) : '—',
+      headCurve.todayN ? `${headCurve.todayN} closed` : 'none closed'),
+    cell('All time', headSt.n ? signed(headSt.net) : '—',
+      headSt.n ? `${headSt.wins}W/${headSt.losses}L · ${pct(headSt.hit)}` : 'no history')
+  ]));
+  if (eq.atRisk > 0 || headSt.n) {
+    e.addFields(...padGrid([
+      eq.atRisk > 0 && cell('At risk', money(eq.atRisk), `${open.length} open`),
+      headSt.n && cell('Day high', money(headCurve.todayPeak),
+        headCurve.todayPeak - headCurve.equity > 0.005
+          ? `${signed(-(headCurve.todayPeak - headCurve.equity))} off` : 'at the high'),
+      headSt.n && cell('Peak', money(headCurve.peak),
+        headCurve.fromPeak > 0.005 ? `${signed(-headCurve.fromPeak)} off` : 'new high')
+    ]));
+  }
+  // Sentences, at full width, only when there is something to say.
+  const headNotes = [
+    capped && `Equity is capped by your ${money(ceiling)} exchange balance.`,
+    shardShort && `⚠️ Only **${money(shardCash)}** is usable here — crypto trades on shard ` +
+      `${CRYPTO_SHARD} and the rest of your balance sits on another shard, where it cannot back an order.`,
+    (() => { const r = accessRow(t); return r ? `${r[0]}: ${r[1]}` : null; })()
+  ].filter(Boolean);
+  if (headNotes.length) e.addFields(prose(headNotes.join('\n')));
 
   // ── performance: live and paper, side by side, never pooled ──
   //
@@ -369,45 +423,36 @@ async function mainPayload(t) {
   // Two blocks because there are two books. Today used to be read off the WHOLE book while All
   // time was read off the live half, so one panel showed `Today +$82.98 / 10 closed` directly
   // above `All time +$0.00 / 0 closed`. Neither number was wrong; the label was.
-  const perfField = (label, active, st, curve) => {
-    const name = label + (active ? '   ← this account' : '');
-    // Four rows of $0.00 is not a report, it is furniture. Before the first close, the block says
-    // the one true thing about that book: where it starts.
-    if (!st.n) {
-      return {
-        name,
-        value: `_nothing closed yet — this book starts at ${money(curve.start)}_`,
-        inline: false
-      };
-    }
-    return {
-    name,
-    value: table([
-      // Both lines in the SAME shape. They read as a comparison, so describing one with W/L and
-      // the other with a percentage made them look like they disagreed when they never did.
-      ['Today', `${signed(curve.todayNet)}   ${curve.todayN} closed`],
-      ['All time', `${signed(st.net)}   ${st.n} closed` +
-        (st.n ? `  ·  ${st.wins}W/${st.losses}L  ·  ${pct(st.hit)}` : '')],
-      ['Day high', money(curve.todayPeak) +
-        (curve.todayPeak - curve.equity > 0.005
-          ? `   ${signed(-(curve.todayPeak - curve.equity))} from today's high`
-          : "   ← at today's high")],
-      ['All-time high', money(curve.peak) +
-        (curve.fromPeak > 0.005 ? `   ${signed(-curve.fromPeak)} from peak` : '   ← at a new high')],
-      curve.maxDrawdown > 0.005 && ['Worst drop', `${signed(-curve.maxDrawdown)} peak to trough`],
-      st.n > 0 && ['Fees paid', money(st.fees)]
-    ]) + (active && st.n >= 3 && st.hit != null
-      // Win rate is the one figure here with a denominator that cannot be exceeded, so it is the
-      // one a bar can honestly draw. Below three trades it would be drawing noise.
-      //
-      // Labelled "2 of 3 won" and not "66.7% of 3 won": the latter parses as "66.7%, of which 3
-      // won", which is how a correct 2W/1L book got read as three wins.
-      ? `\n${bar(st.hit)}  ${st.wins} of ${st.n} won` : ''),
-    inline: false
-    };
-  };
-  e.addFields(perfField('Live  ·  real money', live === true, liveSt, liveEq));
-  e.addFields(perfField('Paper', live !== true, paperSt, paperEq));
+  // ── the two books, never pooled, but only one of them expanded ──
+  //
+  // There are two books and they must never be added together, but they do not deserve equal space:
+  // the one this account is USING is what the reader came for, and the other only needs to exist so
+  // nobody wonders where it went. So the active book gets the grid and the idle one gets a single
+  // line. Both are labelled explicitly, because Today was once read off the whole book while All time
+  // came off the live half, and one panel showed `Today +$82.98 / 10 closed` directly above
+  // `All time +$0.00 / 0 closed` — neither number wrong, the labels lying.
+  const bookLine = (label, st, curve) => st.n
+    ? `**${label}** ${signed(st.net)} · ${st.n} closed · ${st.wins}W/${st.losses}L · ${pct(st.hit)}`
+    : `**${label}** nothing closed yet — starts at ${money(curve.start)}`;
+
+  const idle = usingLive
+    ? bookLine('Paper', paperSt, paperEq)
+    : bookLine('Live · real money', liveSt, liveEq);
+
+  if (headSt.n) {
+    e.addFields(divider(usingLive ? 'Live · real money' : 'Paper'));
+    e.addFields(...padGrid([
+      cell('Closed', String(headSt.n), `${headSt.wins}W/${headSt.losses}L`),
+      cell('Win rate', pct(headSt.hit),
+        // The one figure here with a denominator that cannot be exceeded, so the only one a bar can
+        // honestly draw. Below three trades it would be drawing noise.
+        headSt.n >= 3 && headSt.hit != null ? bar(headSt.hit, 8) : undefined),
+      cell('Fees paid', money(headSt.fees),
+        headCurve.maxDrawdown > 0.005 ? `worst drop ${signed(-headCurve.maxDrawdown)}` : undefined)
+    ]));
+  }
+  // The idle book, one line. Present so nobody hunts for it, quiet so it does not compete.
+  e.addFields(prose(idle));
 
   // ── open: the money actually at stake, and nothing else ──
   //
@@ -423,6 +468,7 @@ async function mainPayload(t) {
     ? `\n_${paperOpenN} paper position${paperOpenN === 1 ? '' : 's'} from before you armed ` +
       'is still settling — it counts towards the paper book above, not towards this. See Trades._'
     : '';
+  e.addFields(divider('Open positions'));
   e.addFields({
     name: shownOpen.length
       ? `Open  ·  ${shownOpen.length}  ·  ${money(eq.atRisk)} at risk`
@@ -436,8 +482,9 @@ async function mainPayload(t) {
     inline: false
   });
 
+  e.addFields(divider(`Setup · ${STRATEGY}`));
   e.addFields({
-    name: 'Setup',
+    name: ZWSP,
     value: table([
       ['Shares/trade', (() => {
         if (!t.get('autoShares')) return t.fmt('shares');
@@ -552,7 +599,10 @@ async function mainPayload(t) {
   }
   // The instance that answered, because two of them once shared a token and every symptom read as
   // the panel contradicting itself. If two footers ever differ, that is the whole diagnosis.
+  // A timestamp because "is this stale?" is the second question after "is it on?", and an embed with
+  // no clock looks equally fresh an hour later. Discord renders setTimestamp in the reader's own zone.
   e.setFooter({ text: (t.rec.tag || t.userId) + (t.isOwner ? '  ·  owner' : '') + `  ·  ${INSTANCE}` });
+  e.setTimestamp(new Date());
   return { embeds: [e], components: mainComponents(t), flags: MessageFlags.Ephemeral };
 }
 
