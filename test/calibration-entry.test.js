@@ -182,6 +182,55 @@ users.init({ log: () => {} });
   const wide = await trader.decideFor(coin);
   eq(wide.skip, 'cal-wide-spread', `a 5c spread is refused (got ${wide.skip})`);
 
+  // 8. the RECORDED position carries the gate's own inputs
+  //
+  // This is not bookkeeping. The case for this gate is a measured per-bucket bias over that bucket's
+  // own cost, and the bar for ever letting it touch live money is a day-clustered forward interval
+  // with a lower bound above zero. Neither number can be computed from a position that does not say
+  // which bucket produced it or what spread was paid. These fields were reaching the live panel and
+  // then being dropped by record(), which is how four paper trades ended up with an unverifiable
+  // spread gate. The gap was invisible precisely because nothing failed when the fields went missing,
+  // so it is asserted here against a position built by the real settleEntry path.
+  QUOTE = { yes_ask_dollars: '0.85', no_ask_dollars: '0.16', yes_bid_dollars: '0.84' };
+  const d2 = await trader.decideFor(coin);
+  ok(!d2.skip, `the qualifying round still decides (got ${d2.skip || 'ok'})`);
+  const before = book.openPositions(paper.rec.book).length;
+  const limit2 = trader.entryLimitCents(d2, Number(paper.get('slippageCents')) || 0);
+  eq(limit2, 86, 'the grace-capped limit is still 86c, not the 4c slippage dial');
+  const filled = await trader.settleEntry({
+    t: paper, d: d2, kind: 'paper', shares: 5,
+    limitCents: limit2, res: null, block: null
+  });
+  ok(filled && filled.taken === true,
+    `the paper order fills (got ${filled && filled.why ? filled.why : JSON.stringify(filled)})`);
+  const opened = book.openPositions(paper.rec.book);
+  eq(opened.length, before + 1, 'the paper fill opened exactly one position');
+  const pos = opened[opened.length - 1];
+
+  eq(pos.strategy, 'CALIBRATION', 'the position is tagged with the gate that produced it');
+  eq(pos.calBucket, '75-90c', `the bucket is persisted (got ${pos.calBucket})`);
+  eq(pos.calMarginal, false, 'the bucket is recorded as non-marginal');
+  ok(Number.isFinite(pos.calTStat) && pos.calTStat > 2,
+    `the bucket's t-stat is persisted (got ${pos.calTStat})`);
+  ok(Number.isFinite(pos.calBiasPt) && pos.calBiasPt > 0,
+    `the measured bias is persisted (got ${pos.calBiasPt})`);
+  ok(Number.isFinite(pos.calGraceCents), `the grace allowance is persisted (got ${pos.calGraceCents})`);
+  ok(Number.isFinite(pos.calLimit), `the entry limit is persisted (got ${pos.calLimit})`);
+
+  // The spread is the audit that could not be run on the live trades. 0.84/0.85 is a 1c book, and it
+  // has to survive as 1c on the record rather than as a value inferred from the absence of slippage.
+  ok(Number.isFinite(pos.calSpreadCents) && Math.abs(pos.calSpreadCents - 1) < 1e-6,
+    `the spread paid is persisted exactly (got ${pos.calSpreadCents})`);
+  ok(pos.calSpreadCents <= calibration.CAL_MAX_SPREAD_CENTS,
+    'the persisted spread is inside the validated gate, verifiably and not by inference');
+
+  // calMid must be the BOOK MID, distinct from the fill. midPct is assigned from pricePct for every
+  // strategy, so it is the price paid; if calMid were wired to the same source the cost being measured
+  // would collapse to zero and every future audit would read as free execution.
+  ok(Math.abs(pos.calMid - 0.845) < 1e-6, `calMid is the book mid, not the fill (got ${pos.calMid})`);
+  ok(pos.calMid < pos.price,
+    `the mid sits below the ask actually paid (mid ${pos.calMid} vs paid ${pos.price})`);
+
   Date.now = realNow;
   fs.rmSync(DIR, { recursive: true, force: true });
   console.log(`PASS calibration entry path — ${checks} checks`);

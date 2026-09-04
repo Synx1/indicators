@@ -1231,6 +1231,28 @@ function record(t, d, fill) {
   p.drift10Bps = d.drift10Bps;
   p.volumeRatio = d.volumeRatio;
   p.realizedVolBps = d.realizedVolBps;
+  // ── the calibration gate's own inputs, persisted ──
+  //
+  // These were being computed on every calibration decision, shown on the panel, and then dropped on
+  // the floor: `record()` never copied them onto the position. The cost of that was not cosmetic. The
+  // whole case for this gate is a *measured* per-bucket bias over its own cost, and the bar for ever
+  // letting it touch live money is a day-clustered forward interval whose lower bound is above zero.
+  // Neither is computable from a position that does not say which bucket it came from or what spread
+  // was paid to enter it. Four paper trades went 2W/2L and the spread gate could not be verified on a
+  // single one of them after the fact — only inferred from the absence of slippage.
+  //
+  // `calMid` is the book mid at the decision, which is NOT the price paid: `midPct` above is assigned
+  // from `pricePct` for every strategy, so it is the fill, not a mid. For a book-priced gate the
+  // distance between those two IS the cost being measured, so the real mid is recorded separately
+  // rather than by redefining a field the site and panel already read.
+  p.calBucket = d.calBucket;
+  p.calMarginal = d.calMarginal;
+  p.calTStat = d.calTStat;
+  p.calBiasPt = d.calBiasPt;
+  p.calMid = d.calMid;
+  p.calSpreadCents = d.calSpreadCents;
+  p.calLimit = d.calLimit;
+  p.calGraceCents = d.calGraceCents;
   t.save();
   return p;
 }
