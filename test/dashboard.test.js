@@ -18,6 +18,8 @@
 const assert = require('assert');
 const Module = require('module');
 
+process.env.STRATEGY = 'favourite';
+
 let ACCOUNTS = [];
 const origLoad = Module._load;
 Module._load = function (request) {
@@ -196,7 +198,23 @@ ok(C.filter(c => c.n === 0).length === gl.SYMS.length - 2, 'and untraded coins s
 // An unknown symbol on a legacy position must still be reported, not dropped or crashed on.
 ok(bySym(coinsOf([pos({ sym: undefined })]), '?'), 'a position with no sym lands in a "?" row rather than vanishing');
 
-// ── 8. the page renders these payloads without throwing ──────────
+// ── 8. Favourite is visibly and operationally suspended ─────────
+ACCOUNTS = [{
+  userId: 'u1', rec: { tag: 'tester', book: { positions: [] }, balance: 100 },
+  get: k => ({ live: true, armed: true, shares: 30, autoShares: false, paperBankroll: 500 }[k])
+}];
+const validation = data.recommendations().accounts[0].rows.find(r => r.key === 'strategyValidation');
+ok(validation, 'Favourite recommendations include a strategy-validation row');
+eq(validation.recommended, 'observe only', 'the recommendation cannot imply paper or live account exposure');
+eq(validation.severity, 'high', 'arming a suspended strategy is a high-severity configuration');
+ok(/refuses Favourite entries in both paper and live books/.test(validation.why),
+  'the dashboard names the fail-closed execution scope');
+ok(/8\/11.*-16\.76%.*persistence challenger.*negative/.test(validation.why),
+  'the dashboard names the matched forward evidence that caused suspension');
+ok(/public-data shadow continues observing/.test(validation.why),
+  'the dashboard distinguishes observation from account exposure');
+
+// ── 9. the page renders these payloads without throwing ──────────
 const page = require('../src/sitepage');
 const html = page();
 ok(/data-t=hours/.test(html), 'the Hours tab button is in the markup');
