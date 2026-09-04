@@ -19,6 +19,9 @@ const assert = require('assert');
 const Module = require('module');
 
 process.env.STRATEGY = 'favourite';
+// Favourite is suspended, so config.js would otherwise fall back to calibration and this suite
+// would silently stop testing the favourite path at all. Opt in to the suspended gate on purpose.
+process.env.STRATEGY_ALLOW_SUSPENDED = '1';
 
 let ACCOUNTS = [];
 const origLoad = Module._load;

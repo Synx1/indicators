@@ -1,17 +1,16 @@
 /**
- * Does a favourite signal actually become a POSITION? The whole path, not just the gate.
+ * Does a failed Favourite configuration stay observable without becoming a POSITION?
  *
  * ── why this file exists ──
  *
- * The favourite gate shipped and the bot then took no trades for thirteen hours. The gate was fine —
- * decideFor returned entries and test/favourite.test.js proved it. What stopped them was everything
- * AFTER the gate: gateSignal held each one for sixty seconds of continuous persistence it could never
- * accumulate. That was invisible to every existing test, because no test drove a decision past decideFor.
+ * The raw quote gate remains useful research telemetry, but the matched forward audit is 8/11 and
+ * -16.76% after fees, with every pre-declared persistence challenger negative. A configuration in that
+ * state must not keep filling an account merely because it is paper money: that hides the decision to
+ * suspend it behind a bankroll nobody can lose.
  *
  * So this drives the real sequence — decideFor, gateSignal, accountBlock, sharesFor, placeEntry — with a
- * real user record and a stubbed exchange, and asserts a paper position exists at the end. Anything that
- * silently refuses an 87c entry between the gate and the book fails here instead of costing another
- * thirteen hours.
+ * real user record and a stubbed exchange. It proves the signal remains visible to the observer while the
+ * last common execution guard refuses both paper and live exposure.
  *
  * ── the specific thing that nearly bit twice ──
  *
@@ -30,6 +29,9 @@ const os = require('os');
 const path = require('path');
 
 process.env.STRATEGY = 'favourite';
+// Favourite is suspended, so config.js would otherwise fall back to calibration and this suite
+// would stop proving that the suspended gate refuses entries. Opt in to it on purpose.
+process.env.STRATEGY_ALLOW_SUSPENDED = '1';
 // A scratch DATA_DIR so this never reads or writes the real users.json.
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'favent-'));
 process.env.STATE_DIR = DIR;
@@ -71,6 +73,19 @@ Module._load = function (request) {
 const trader = require('../src/trader');
 const users = require('../src/users');
 const book = require('../src/book');
+
+// Slippage can improve fill probability inside the measured band, never turn a rejected 91c quote into
+// an accepted fill. The model path keeps its existing generic exchange ceiling.
+eq(trader.entryLimitCents({ strategy: 'FAVOURITE', pricePct: 85 }, 4), 89,
+  'favorite slippage is usable while the resulting limit remains in band');
+eq(trader.entryLimitCents({ strategy: 'FAVOURITE', pricePct: 87 }, 4), 90,
+  'favorite slippage is capped at the validated 90c ceiling');
+eq(trader.entryLimitCents({ strategy: 'FAVOURITE', pricePct: 90 }, 20), 90,
+  'even a large user allowance cannot chase a 90c favorite');
+eq(trader.entryLimitCents({ strategy: 'MODEL', pricePct: 65 }, 4), 69,
+  'the model strategy retains its prior slippage behavior');
+eq(trader.entryLimitCents({ strategy: 'FAVOURITE', pricePct: NaN }, 4), null,
+  'an invalid quote fails closed');
 require('../src/markets').init({ log: () => {} });
 users.init({ log: () => {} });
 
@@ -80,6 +95,7 @@ const t = users.tenant(UID, { create: true });
 t.grantAccess(30, 'TEST-KEY');
 t.set('live', false);
 t.set('shares', 5);
+t.set('slippageCents', 4);
 ok(t.hasAccess(), 'the test account has access — without it nothing trades, not even paper');
 
 (async () => {
@@ -93,27 +109,20 @@ ok(t.hasAccess(), 'the test account has access — without it nothing trades, no
   const d = trader.gateSignal(coin, raw, Date.now());
   ok(!d.skip, `gateSignal does not hold a favourite signal (got ${d.skip || ''})`);
 
-  // 3. accountBlock permits it
+  // 3. the last common guard suspends account exposure, including paper
   const why = trader.accountBlock(t, d);
-  eq(why, null, `accountBlock permits an 87c paper entry (got: ${why})`);
+  ok(/entries suspended.*8\/11.*observer remains on/.test(why),
+    `accountBlock names the failed forward evidence and observer fallback (got: ${why})`);
 
-  // 4. it sizes to something tradeable
-  eq(trader.sharesFor(t, d), 5, 'fixed size is honoured at 87c');
+  // 4. sizing remains correct for research and for any future configuration that earns reactivation
+  eq(trader.sharesFor(t, d), 5, 'fixed size arithmetic remains defined at 87c');
 
-  // 5. and it becomes a position
+  // 5. bypassing the caller's pre-check still fails closed inside placeEntry
   const claims = new Map();
   const placed = await trader.placeEntry(t, d, claims);
-  ok(placed && placed.taken !== false, `placeEntry opens the position (got: ${placed && placed.why})`);
-  // placeEntry returns only the pending half — the caller owns `t` and `d` and merges them in, which is
-  // how runOnce does it so the fill-grace waits can be gathered and run together.
-  if (placed && placed.pending) await trader.settleEntry({ t, d, ...placed.pending });
-  const open = book.openPositions(t.rec.book);
-  eq(open.length, 1, 'exactly one position is on the book');
-  if (process.env.DUMP) console.log(JSON.stringify(open[0], null, 1));
-  eq(open[0].side, 'YES', 'on the dear side');
-  eq(Math.round(Number(open[0].entryPrice != null ? open[0].entryPrice : open[0].price) * 100), 87,
-    'recorded at the price the book was offering');
-  eq(open[0].strategy, 'FAVOURITE', 'and tagged with the gate that produced it');
+  ok(placed && placed.taken === false, 'placeEntry independently refuses the suspended strategy');
+  ok(/entries suspended/.test(placed.why), 'the placement refusal carries the suspension reason');
+  eq(book.openPositions(t.rec.book).length, 0, 'no paper position reaches the account book');
 
   /**
    * The sizer divides by the MODEL's ceiling, not the entry price.

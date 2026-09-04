@@ -142,6 +142,55 @@ const INSTANCE = [
   `pid${process.pid}`
 ].filter(Boolean).join('·');
 
+/**
+ * Resolve the active gate, and REFUSE to settle on one that cannot fill.
+ *
+ * ── the failure this exists to stop ──
+ *
+ * A gate can be suspended in code (FAV_FORWARD_READY=false makes accountBlock refuse every favourite
+ * entry in both books) while STRATEGY still names it. The bot then boots healthy, polls Kalshi, writes
+ * logs, updates the dashboard, sends no errors — and takes zero trades forever. That happened: the
+ * default was changed to `calibration`, but an explicit STRATEGY=favourite on the host still won, so
+ * the deploy kept refusing silently and looked completely normal from the outside.
+ *
+ * Defaulting away from favourite was not enough, because an environment variable outranks a default.
+ * So this checks the RESOLVED value against the gate's own readiness flag and falls back to a gate that
+ * can actually fill, printing a loud line rather than failing quietly. A bot that trades the wrong-named
+ * gate and says so is strictly better than a bot that trades nothing and says nothing.
+ *
+ * Fallback is paper-safe: calibration's CAL_LIVE_READY is false and enforced twice, and `armed` is
+ * forced false on every startup, so this can never move real money on its own.
+ */
+function resolveStrategy() {
+  const asked = String(process.env.STRATEGY || 'calibration').toLowerCase();
+  // An explicit escape hatch, because "run the suspended gate anyway" is a legitimate thing to want:
+  // observing what a refused gate WOULD have signalled is how its suspension gets reviewed, and the
+  // gate tests have to drive the real favourite path. It must be opt-in and separate from STRATEGY, so
+  // that naming a dead gate by accident still cannot cost a silent day of zero trades.
+  if (String(process.env.STRATEGY_ALLOW_SUSPENDED || '') === '1') return asked;
+  let ready;
+  try {
+    ready = {
+      favourite: require('./favourite').FAV_FORWARD_READY,
+      calibration: require('./calibration').CAL_FORWARD_READY
+    };
+  } catch (_) {
+    // If a gate module cannot load, honour the request rather than guessing; the trader will fail
+    // loudly on its own require instead of this silently rewriting the operator's intent.
+    return asked;
+  }
+  // `model` has no readiness flag and is always able to fill, so it is never rewritten.
+  if (ready[asked] === false) {
+    const fallback = ready.calibration ? 'calibration' : 'model';
+    process.stderr.write(
+      `!! STRATEGY=${asked} is SUSPENDED in code and would take zero trades. ` +
+      `Falling back to ${fallback}. Set STRATEGY=${fallback} (or re-enable ${asked}) to silence this.\n`
+    );
+    return fallback;
+  }
+  return asked;
+}
+
 module.exports = {
   loadEnvFile,
   resolveKeyDir,
@@ -192,7 +241,7 @@ module.exports = {
    * false and enforced in accountBlock and again in placeEntry, so this default cannot put real money
    * at risk. Set STRATEGY=model or STRATEGY=favourite explicitly to override.
    */
-  STRATEGY: (process.env.STRATEGY || 'calibration').toLowerCase(),
+  STRATEGY: resolveStrategy(),
 
   // ── web ──
   PORT: Number(process.env.PORT || 3000),
