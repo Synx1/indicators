@@ -33,6 +33,7 @@
 
 const decide = require('./decide');
 const favourite = require('./favourite');
+const calibration = require('./calibration');
 const series = require('./series');
 const gl = require('./markets');
 const users = require('./users');
@@ -162,7 +163,7 @@ const signalTracker = createSignalTracker();
 /**
  * Turn a fresh qualifying impulse into a visible skip until its direction has persisted.
  *
- * ── the favourite gate is exempt, and that is not a shortcut ──
+ * ── the book-priced gates are exempt, and that is not a shortcut ──
  *
  * This exists because the model's direction comes out of a noisy z and flips between passes, so a fresh
  * reading is not yet evidence. The favourite gate has no such problem: its "direction" is which side the
@@ -179,11 +180,20 @@ const signalTracker = createSignalTracker();
  *
  * The tracker is left completely untouched for these decisions rather than merely ignored, so that under
  * STRATEGY=both a favourite skip cannot silently reset the model's watch and starve the other gate too.
+ *
+ * ── calibration is exempt for the same reason, plus a harder one ──
+ *
+ * Its signal is likewise the book's own price, not a momentum read, so persistence would be confirming a
+ * number that never flickered. But it would also break the gate outright: calibration decides inside a
+ * 90-second window (8.25-9.75 minutes left), so a 60-second continuous-persistence requirement would
+ * discard nearly every qualifying round and the gate would take almost no trades at all — the same way
+ * persistence once silenced the live favourite bot completely.
  */
 function gateSignal(coin, d, now = Date.now(), tracker = signalTracker) {
-  const isFav = d && (d.strategy === 'FAVOURITE' ||
-    (typeof d.skip === 'string' && d.skip.startsWith('fav-')));
-  if (isFav) return d;
+  const isBookPriced = d && (
+    d.strategy === 'FAVOURITE' || d.strategy === 'CALIBRATION' ||
+    (typeof d.skip === 'string' && (d.skip.startsWith('fav-') || d.skip.startsWith('cal-'))));
+  if (isBookPriced) return d;
   const seen = tracker.observe(coin && coin.sym, d && d.observation, now);
   if (!d || d.skip) return d;
   if (!seen.ready) {
@@ -612,6 +622,65 @@ async function favouriteFor(coin, market, strike, s, candles) {
 }
 
 /**
+ * The CALIBRATION gate applied to one round.
+ *
+ * Same shape as favouriteFor so sizing, the book, the DM and the site read it without caring which gate
+ * produced it. The difference is what it buys: favourite only ever bought an 85-90c YES-or-NO side inside
+ * a fixed band, while this gate buys whichever side the market has priced 75-95c and refuses the mid
+ * prices entirely, because that is where its measured edge lives. See src/calibration.js for the corpus.
+ *
+ * The quote is re-fetched for the same reason favouriteFor re-fetches: a 15-minute binary can move 20-30c
+ * in a second, and the price this gate refuses on must be the price it records.
+ */
+async function calibrationFor(coin, market, strike, s, candles) {
+  const ml = (new Date(market.close_time).getTime() - Date.now()) / 60000;
+  const fresh = await getMarket(market.ticker);
+  const quoted = fresh || market;
+  const yesAsk = parseFloat(quoted.yes_ask_dollars || 0);
+  const yesBid = parseFloat(quoted.yes_bid_dollars || 0);
+  // closeTime drives the session gate; without it the excluded ET hours cannot be applied.
+  const r = calibration.evaluate({ yesAsk, yesBid, minutesLeft: ml, closeTime: market.close_time });
+  const obs = { yesAsk, yesBid, noAsk: parseFloat(quoted.no_ask_dollars || 0), minutesLeft: ml };
+
+  if (r.skip) {
+    return {
+      skip: r.skip, why: r.why, obs, minutesLeft: ml,
+      nearest: r.mid == null ? null : r.mid, nearestSide: 'YES',
+      spreadCents: r.spreadCents == null ? null : r.spreadCents
+    };
+  }
+
+  // Reported, never gated on — the edge was measured over every market, not over the subset where
+  // indicators happened to agree.
+  const rsi = candles && candles.length ? decide.calcRSI(candles) : null;
+  const diagnostics = (candles && candles.length && s)
+    ? marketDiagnostics(candles, s.price, strike) : {};
+
+  return {
+    sym: coin.sym, market: quoted,
+    observation: { ticker: quoted.ticker, side: r.side, confidence: r.winPct },
+    strategy: 'CALIBRATION',
+    exchangeIndex: market.exchange_index == null ? null : Number(market.exchange_index),
+    strike, minutesLeft: ml,
+    side: r.side, direction: r.side === 'YES' ? 'UP' : 'DOWN',
+    // The book's own price plus the bucket's measured bias. Not a model output.
+    confidence: r.winPct, z: null, confirm: null,
+    rsi: rsi == null ? null : Math.round(rsi),
+    price: r.price, pricePct: Math.round(r.price * 100),
+    style: 'CALIBRATION',
+    spot: s ? s.price : null, spotAgeMs: s ? s.ageMs : null, candleAgeMs: null,
+    modelPct: r.winPct, edgePt: r.edgePt,
+    breakEvenPct: r.breakEvenPct, feePt: r.feePt,
+    spread: r.spreadCents == null ? null : r.spreadCents / 100,
+    // Carried so the panel and site can show WHY this round qualified and how strong the band is.
+    calBucket: r.bucket, calMarginal: r.marginal, calTStat: r.tStat,
+    calBiasPt: r.biasPt, calMid: r.mid, calSpreadCents: r.spreadCents,
+    calLimit: r.limit, calGraceCents: r.graceCents,
+    ...diagnostics
+  };
+}
+
+/**
  * Decide for one market. Returns a decision, or a skip with the reason.
  *
  * Pure of side effects beyond the network reads, so the loop can be reasoned about and the same
@@ -624,11 +693,12 @@ async function decideFor(coin) {
     return { skip: 'cooling', why: 'backing off after a rate limit' };
   }
 
-  // ── the three inputs at once ──
+  // ── only await inputs the active gate can use ──
   //
-  // They are independent — two Coinbase reads and one Kalshi read — and running them in series cost
-  // most of a second per coin, all of it staleness by the time the price gate ran. The candle read is
-  // usually a cache hit, so this is normally two requests in the time one used to take.
+  // The model needs Coinbase spot and candles. Favourite does not: its signal is the Kalshi book, so
+  // waiting up to ten seconds for unrelated diagnostics made an otherwise fresh quote stale before the
+  // decision. Favourite-only now performs no Coinbase request on the entry path; `both` and `model` keep
+  // the parallel three-input read because they really use all three.
   // ── the clock the round is chosen against ──
   //
   // Each gate was measured inside its own window and must not be traded outside it. Running 'both'
@@ -636,6 +706,9 @@ async function decideFor(coin) {
   // quietly handing the favourite gate a 13-minute market it has no measurement for.
   const wantFav = STRATEGY === 'favourite' || STRATEGY === 'both';
   const wantModel = STRATEGY === 'model' || STRATEGY === 'both';
+  // The calibration gate is opt-in by name so adding it cannot silently change what an existing
+  // STRATEGY=favourite or STRATEGY=both deployment trades.
+  const wantCal = STRATEGY === 'calibration' || STRATEGY === 'calibration+model';
   // The favourite half of the union is the PRESET's window, so tightening the preset also narrows what
   // findActive fetches. Reading the module constants here instead would keep pulling T-6 rounds under
   // Passive and then refuse every one of them inside the gate — the same work for a guaranteed skip.
@@ -654,10 +727,15 @@ async function decideFor(coin) {
   // either way — and the model path below re-raises the rate-limit cooldown that used to happen here.
   let market, s, candles, feedErr = null;
   try {
+    const feedReads = wantModel
+      ? [
+          getSpot(coin.product).catch(e => { feedErr = feedErr || e; return null; }),
+          getCandles(coin.product).catch(e => { feedErr = feedErr || e; return []; })
+        ]
+      : [Promise.resolve(null), Promise.resolve([])];
     [market, s, candles] = await Promise.all([
       findActive(coin.series, loMin, hiMin),
-      getSpot(coin.product).catch(e => { feedErr = feedErr || e; return null; }),
-      getCandles(coin.product).catch(e => { feedErr = feedErr || e; return []; })
+      ...feedReads
     ]);
   } catch (e) {
     if (isRateLimit(e)) {
@@ -683,6 +761,20 @@ async function decideFor(coin) {
   // rather than after them: the edge was measured on ALL markets, and only offering it rounds that
   // already cleared 80% confidence and 3-of-4 indicators would be a different population than the one
   // the number came from.
+  // ── the calibration gate, on the same book-only footing as favourite ──
+  //
+  // Ahead of the spot and candle reads for the same reason: its signal IS the order book, so a stale
+  // Coinbase candle cannot make it wrong.
+  // A hit is the decision. A miss is only final when no other gate is running — under a combined
+  // strategy the round falls through and gets its second look, exactly as the favourite gate does.
+  let calSkip = null;
+  if (wantCal) {
+    const cal = await calibrationFor(coin, market, strike, s, candles);
+    if (cal && !cal.skip) return cal;
+    calSkip = cal;
+    if (!wantFav && !wantModel) return calSkip;
+  }
+
   if (wantFav) {
     const fav = await favouriteFor(coin, market, strike, s, candles);
     // ── the chart's observation, recorded AFTER the gate has decided ──
@@ -965,6 +1057,37 @@ function accountBlock(t, d) {
   // same window as one of them would have been refused outright. Scoped, not removed: in paper mode
   // the paper book guards itself the same way.
   const willBeLive = !paperAllowed(t);
+
+  // Favourite's historical point estimate did not survive its first matched forward audit. Keep the
+  // signal observable in the dedicated public shadow, but do not let either a paper or live account keep
+  // compounding a configuration whose fee-adjusted forward result is negative. This is deliberately a
+  // separate switch from live promotion: forward evidence must first re-enable account entries, and the
+  // stronger clustered-evidence requirement must independently re-enable real money.
+  // The calibration gate is paper-only. Its historical walk-forward is +3.01% fee-adjusted with a
+  // day-clustered lower bound of +1.22pp at a PERFECT fill, but only +1.01% with the interval touching
+  // zero at one cent of slippage, and its signals arrive heavily correlated across coins, so the
+  // effective sample is far smaller than the trade count. Real money waits for a forward interval whose
+  // lower bound is above zero measured on independent windows.
+  const isCalibration = String(d && d.strategy || '').toUpperCase() === 'CALIBRATION';
+  if (isCalibration && !calibration.CAL_FORWARD_READY) {
+    return 'Calibration entries are disabled';
+  }
+  if (willBeLive && isCalibration && !calibration.CAL_LIVE_READY) {
+    return 'Calibration is paper-only — walk-forward is +3.01% at a perfect fill but +1.01% with the ' +
+      'interval touching zero at 1c slippage, and signals are correlated across coins, so live ' +
+      'entries remain disabled';
+  }
+
+  const isFavourite = String(d && d.strategy || '').toUpperCase() === 'FAVOURITE';
+  if (isFavourite && !favourite.FAV_FORWARD_READY) {
+    return 'Favourite entries suspended — matched forward evidence is 8/11 with -16.76% fee-adjusted ' +
+      'ROI, and every pre-declared persistence challenger is negative; the public observer remains on';
+  }
+  if (willBeLive && isFavourite && !favourite.FAV_LIVE_READY) {
+    return 'Favourite is paper-only — guarded historical edge is +0.87pp, but its day-clustered ' +
+      '95% interval is -0.50pp to +2.23pp, so live entries remain disabled';
+  }
+
   const mine = book.openPositions(b).filter(p => Boolean(p.live) === willBeLive);
 
   // One position per ticker per account: a second entry on the same round is not a second
@@ -1024,10 +1147,12 @@ function accountBlock(t, d) {
     // arithmetic rather than "shares not set".
     if (t.get('autoShares')) {
       const bank = liveOrPaperBalance(t);
+      const quoted = Number(d && d.price);
+      const unitPrice = Number.isFinite(quoted) && quoted > 0 && quoted <= 1 ? quoted : MAX_PRICE;
       return `auto size works out to 0 contracts — ${users.money(bank)} at ` +
         `${Math.round(Number(t.get('riskPerTrade')) * 100)}% risk is ` +
         `${users.money(bank * Number(t.get('riskPerTrade')))} per trade, and one contract at ` +
-        `${MAX_PRICE * 100}¢ costs ${users.money(MAX_PRICE)}`;
+        `${Math.round(unitPrice * 100)}¢ costs ${users.money(unitPrice)}`;
     }
     return 'shares per trade is not set';
   }
@@ -1280,6 +1405,29 @@ function addClaim(claims, accountId, d) {
  * Returns a terminal result ({taken:false, why}) for a block or a rejection, or {pending} for
  * settleEntry to finish. A CLAIM is recorded the moment an order is committed — see claimBlock.
  */
+/**
+ * Worst price an entry may pay.
+ *
+ * Slippage may catch a moving quote, but it may not move a Favourite order outside 85-90c: 91c is a
+ * strategy refusal in favourite.evaluate(), so filling it through a 94c generic limit would trade a
+ * population the backtest never validated. Model entries retain their existing 99c exchange ceiling.
+ */
+function entryLimitCents(d, slippageCents) {
+  const quoted = Math.round(Number(d && d.pricePct));
+  if (!Number.isFinite(quoted) || quoted < 1 || quoted > 99) return null;
+  const slip = Math.max(0, Math.floor(Number(slippageCents) || 0));
+  // Calibration's own limit is the quoted ask plus its measured 1c grace allowance. A generic slippage
+  // cap must not push an entry past that: the grace value was chosen because 2c bought nothing extra.
+  if (d && d.strategy === 'CALIBRATION') {
+    const capCents = Math.round((Number(d.calLimit) || 0) * 100);
+    if (capCents >= 1 && capCents <= 99) return Math.max(1, Math.min(capCents, quoted + slip));
+  }
+  const strategyCap = d && d.strategy === 'FAVOURITE'
+    ? Math.round(favourite.FAV_HI * 100)
+    : 99;
+  return Math.max(1, Math.min(strategyCap, quoted + slip));
+}
+
 async function placeEntry(t, d, claims) {
   const why = accountBlock(t, d);
   if (why) return { taken: false, why };
@@ -1292,7 +1440,8 @@ async function placeEntry(t, d, claims) {
   const liveWanted = t.get('live');
   const block = liveWanted ? t.liveBlock() : null;
   const slip = Number(t.get('slippageCents')) || 0;
-  const limitCents = Math.max(1, Math.min(99, d.pricePct + slip));
+  const limitCents = entryLimitCents(d, slip);
+  if (limitCents == null) return { taken: false, why: 'entry price is invalid' };
 
   // Paper whenever live is off, or live is on but something blocks it. A blocked live account still
   // gets the paper record, so the decision is not lost from its history.
@@ -1850,11 +1999,15 @@ async function runOnce() {
         closeTime: d.market.close_time, taken: true
       });
     } catch (e) { log(`  !! depth observe failed for ${coin.sym}: ${e.message}`); }
+    const isFavourite = d.strategy === 'FAVOURITE';
+    const signalDetail = isFavourite
+      ? `${d.direction} @${d.pricePct}¢ — book favourite; estimated win ${d.confidence}% ` +
+        `(break-even ${d.breakEvenPct}%), historical fee-adjusted edge +${d.edgePt}pp` + diagnosticText(d)
+      : `${d.direction} @${d.pricePct}¢ — ${d.confidence}% model confidence, ${d.confirm}/4 ` +
+        `indicators agreed, ${d.style === 'DIP' ? 'bought a dip' : 'chased a move'}` + diagnosticText(d);
     activity.push({
       sym: coin.sym, kind: 'TAKEN', reason: 'signal',
-      detail: `${d.direction} @${d.pricePct}¢ — ${d.confidence}% confidence, ${d.confirm}/4 ` +
-        `indicators agreed, ${d.style === 'DIP' ? 'bought a dip' : 'chased a move'}` +
-        diagnosticText(d),
+      detail: signalDetail,
       meta: {
         direction: d.direction, price: d.price, pricePct: d.pricePct,
         confidence: d.confidence, confirm: d.confirm, z: d.z, rsi: d.rsi,
@@ -1866,9 +2019,15 @@ async function runOnce() {
         realizedVolBps: d.realizedVolBps
       }
     });
-    log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
-      `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ` +
-      `${d.style}${diagnosticText(d)}`);
+    if (isFavourite) {
+      log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  FAVOURITE  estimated win ${d.confidence}%  ` +
+        `break-even ${d.breakEvenPct}%  edge +${d.edgePt}pp  ${d.minutesLeft.toFixed(1)}m left` +
+        diagnosticText(d));
+    } else {
+      log(`  ${coin.sym} ${d.direction} @${d.pricePct}c  conf ${d.confidence}%  ${d.confirm}/4  ` +
+        `z=${d.z}  spot ${(d.spotAgeMs / 1000).toFixed(1)}s old  ${d.minutesLeft.toFixed(1)}m left  ` +
+        `${d.style}${diagnosticText(d)}`);
+    }
 
     // PLACE every account's order now (guarded, claim recorded); defer the fill-grace wait so the
     // waits across coins overlap in the settle phase below instead of aging each other's quotes.
@@ -1965,7 +2124,7 @@ module.exports = {
   activity,
   sharesFor, liveOrPaperBalance, paperAllowed, paperFill, mapLimit, shardCash, refreshBalances,
   reconcileFills,
-  start, stop, runOnce, decideFor, applyTo, placeEntry, settleEntry, claimBlock, accountBlock,
+  start, stop, runOnce, decideFor, applyTo, placeEntry, settleEntry, entryLimitCents, claimBlock, accountBlock,
   checkExits, closePosition, resultFor, sellPrice, getMarket,
   findActive, getSpot, getCandles, stats, gradeWin, confOK, gapOK, settleShadows,
   // signalTracker is exported as a test seam: the assertion that a favourite skip leaves the model's

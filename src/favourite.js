@@ -10,18 +10,18 @@
  * order-flow signal or microstructure signal moved it.
  *
  * What DID move was looking at the price rather than predicting it. Buying the cheap side systematically
- * loses 3.8 points below its own price — a contract is cheap because its side is losing, so scanning for a
- * cheap entry buys a falling knife. A binary has two sides, so the mirror of that is the dear one, and the
- * dear side wins ABOVE its price:
+ * loses below its own price — a contract is cheap because its side is losing, so scanning for a cheap entry
+ * buys a falling knife. A binary has two sides, so the mirror of that is the dear one.
+ *
+ * The expanded local corpus (25,159 usable markets, 2026-06-26..09-01) currently measures the raw gate at:
  *
  *   85-90c, 12 to 6 minutes left, held to settlement
- *   3,938 signals   entry 87.15c   win 89.82% [88.83, 90.72]   break-even 87.93%   edge +1.88pp
+ *   12,130 signals   entry 87.15c   win 88.99%   fee-adjusted edge +1.06pp   ROI +1.20%
  *
- * It survives what killed everything before it: all four chronological quarters positive, six of seven
- * coins, both sides symmetric (so it is not a hidden bet on "up"), every entry minute positive, and — the
- * one that matters — the band chosen blind on the first half of the corpus earned +1.60pp on the second
- * half it had never seen. The band was the best of 108 searched, so +1.60pp is the honest figure and
- * +1.88pp is the optimistic one.
+ * The raw result stays positive after clustering by settlement window and by day. The production Neutral
+ * correlation guard is less certain: 2,434 entries, +0.87pp, with a day-clustered 95% interval spanning
+ * -0.50pp to +2.23pp. This is therefore a historical PAPER estimate, not a guaranteed confidence or a
+ * reason to arm real money. Fresh forward evidence still has to earn promotion.
  *
  * ── why it is cheap to be wrong ──
  *
@@ -54,13 +54,30 @@ const FAV_HI = 0.90;
 const FAV_MIN_LEFT = 6;
 const FAV_MAX_LEFT = 12;
 /**
- * The measured out-of-sample edge, in probability points, used as the honest confidence.
+ * Current historical fee-adjusted edge point estimate.
  *
- * Deliberately the smaller of the two numbers. The in-sample figure is +1.88pp; this band was the best of
- * 108 price/window combinations searched, and the best of 108 is biased upward by construction. +1.60pp is
- * what it earned on data that had no part in choosing it, so that is what the bot is allowed to claim.
+ * This is net of the entry fee: estimated P(win) is break-even + FAV_EDGE, not price + FAV_EDGE. Keeping
+ * those definitions aligned prevents the UI from displaying a 1.06pp edge beside a probability that only
+ * clears break-even by a fraction of that amount. The clustered interval is reported above and includes
+ * zero after production guards, so this number is descriptive paper evidence, not certainty.
  */
-const FAV_EDGE = 0.016;
+const FAV_EDGE = 0.0106;
+/**
+ * Entry switch, deliberately false after forward evidence contradicted the historical point estimate.
+ *
+ * The two public-data forward samples, re-scored on the same one-minute closes and production correlation
+ * guard as history, produced 8 wins from 11 entries, -1.611 contracts net and -16.76% fee-adjusted ROI.
+ * First-sight plus every pre-declared elapsed/strict persistence challenger was negative. That does not
+ * prove the anomaly can never return; it does mean the current configuration has not earned another
+ * paper-bankroll entry. The standalone public shadow keeps observing candidates without putting them in
+ * an account book, so this reversible switch can change only after a challenger earns it.
+ */
+const FAV_FORWARD_READY = false;
+/**
+ * Promotion switch, deliberately false while production-guarded clustered uncertainty includes zero.
+ * UI copy saying "paper-only" is not a safety control; execution must fail closed too.
+ */
+const FAV_LIVE_READY = false;
 
 /** Kalshi's taker fee per contract at a price, as a probability cost. Peaks at 50c, near zero at the ends. */
 const feePt = p => 0.07 * p * (1 - p);
@@ -127,12 +144,13 @@ function evaluate({ yesAsk, noAsk, yesBid, minutesLeft, minLeft, maxLeft }) {
   const yb = Number(yesBid);
   const spread = twoSided(ya) && twoSided(yb) ? +(ya - yb).toFixed(4) : null;
 
+  const breakEvenPrice = breakEven(hit.price);
   return {
     side: hit.side,
     price: hit.price,
-    // The honest estimate of P(win): what the market is charging, plus the edge measured out of sample.
-    winPct: +((hit.price + FAV_EDGE) * 100).toFixed(1),
-    breakEvenPct: +(breakEven(hit.price) * 100).toFixed(2),
+    // FAV_EDGE is measured AFTER fees, so add it to break-even rather than directly to the ask.
+    winPct: +((breakEvenPrice + FAV_EDGE) * 100).toFixed(1),
+    breakEvenPct: +(breakEvenPrice * 100).toFixed(2),
     edgePt: +(FAV_EDGE * 100).toFixed(2),
     feePt: +(feePt(hit.price) * 100).toFixed(2),
     minutesLeft: ml,
@@ -142,5 +160,5 @@ function evaluate({ yesAsk, noAsk, yesBid, minutesLeft, minLeft, maxLeft }) {
 
 module.exports = {
   evaluate, breakEven, feePt,
-  FAV_LO, FAV_HI, FAV_MIN_LEFT, FAV_MAX_LEFT, FAV_EDGE
+  FAV_LO, FAV_HI, FAV_MIN_LEFT, FAV_MAX_LEFT, FAV_EDGE, FAV_FORWARD_READY, FAV_LIVE_READY
 };
