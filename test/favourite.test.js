@@ -22,6 +22,9 @@ const assert = require('assert');
 const Module = require('module');
 
 process.env.STRATEGY = 'favourite';
+// Favourite is suspended, so config.js would otherwise fall back to calibration and this suite
+// would silently stop testing the favourite path at all. Opt in to the suspended gate on purpose.
+process.env.STRATEGY_ALLOW_SUSPENDED = '1';
 
 let checks = 0;
 const eq = (a, b, m) => { checks++; assert.deepStrictEqual(a, b, m); };
@@ -60,14 +63,19 @@ eq(fav.evaluate({ yesAsk: 0.87, noAsk: 0.14, yesBid: 0.86, minutesLeft: NaN }).s
 // Break-even is the price PLUS the fee on it, never the price alone. At 87c the fee is 0.79 points.
 ok(Math.abs(fav.breakEven(0.87) - 0.8779) < 1e-4, 'break-even at 87c is 87.79%');
 ok(fav.feePt(0.5) > fav.feePt(0.87), 'the fee is heavier at 50c than at 87c');
-// The claimed win rate is the price plus the out-of-sample edge, and must clear break-even by design.
+// FAV_EDGE is fee-adjusted: estimated P(win) is break-even plus that edge, not ask plus edge.
 const hit = fav.evaluate({ yesAsk: 0.87, noAsk: 0.14, yesBid: 0.86, minutesLeft: 9 });
-ok(hit.winPct > hit.breakEvenPct, 'the gate never offers a trade whose own estimate loses money');
+eq(hit.edgePt, +(fav.FAV_EDGE * 100).toFixed(2), 'edgePt reports the historical net edge');
+eq(hit.winPct, +((fav.breakEven(0.87) + fav.FAV_EDGE) * 100).toFixed(1),
+  'estimated win probability adds net edge to fee-inclusive break-even');
+ok(hit.winPct > hit.breakEvenPct, 'the historical point estimate clears break-even');
 
 // ── the wiring ──
 let QUOTE = { yes_ask_dollars: '0.87', no_ask_dollars: '0.14', yes_bid_dollars: '0.86' };
 let MINUTES_OUT = 9;
 let SPOT_OK = true;
+let TICKER_READS = 0;
+let CANDLE_READS = 0;
 
 const origLoad = Module._load;
 const stubAxios = {
@@ -79,10 +87,12 @@ const stubAxios = {
   get: async (url) => {
     // A dead price feed on purpose: the favourite gate must not care.
     if (/\/ticker/.test(url)) {
+      TICKER_READS++;
       if (!SPOT_OK) throw new Error('ticker down');
       return { data: { price: '100', time: new Date().toISOString() } };
     }
     if (/\/candles/.test(url)) {
+      CANDLE_READS++;
       if (!SPOT_OK) throw new Error('candles down');
       return { data: [] };
     }
@@ -114,7 +124,10 @@ require('../src/markets').init({ log: () => {} });
   eq(d.strategy, 'FAVOURITE', 'the decision says which gate produced it');
   eq(d.side, 'YES', 'the dear side is the one bought');
   eq(d.pricePct, 87, 'priced at the fresh ask');
-  ok(d.confidence > 87, 'confidence is the price plus the measured edge');
+  eq(d.confidence, +((fav.breakEven(0.87) + fav.FAV_EDGE) * 100).toFixed(1),
+    'confidence is the fee-inclusive historical point estimate');
+  eq(TICKER_READS, 0, 'favorite-only makes no Coinbase ticker request on its critical path');
+  eq(CANDLE_READS, 0, 'favorite-only makes no Coinbase candle request on its critical path');
 
   // The NO side, so a lopsided implementation cannot pass. A gate that only ever fires on YES is a bet
   // on "up", and the measurement it is built from came out 954 YES to 983 NO.
@@ -146,7 +159,9 @@ require('../src/markets').init({ log: () => {} });
   d = await trader.decideFor(coin);
   ok(!d.skip, `a dead price feed does not stop a book signal (got ${d.skip || ''} ${d.why || ''})`);
   eq(d.strategy, 'FAVOURITE', 'still the favourite gate');
-  eq(d.spot, null, 'and it reports honestly that it had no spot');
+  eq(d.spot, null, 'and it reports honestly that it did not wait for spot');
+  eq(TICKER_READS, 0, 'even a failing ticker endpoint is never touched by favorite-only');
+  eq(CANDLE_READS, 0, 'even a failing candle endpoint is never touched by favorite-only');
 
   /**
    * The persistence gate must not apply here.
