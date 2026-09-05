@@ -54,6 +54,16 @@ eq(kinds({ ...CLEAN, calSpreadCents: 1.0, calMaxSpreadCents: null,
   'a pre-stamp 1c trade from the 1.05c era is compliant via the known gate history');
 eq(kinds({ ...CLEAN, calSpreadCents: 2.0, calMaxSpreadCents: 1.05 }), ['spread'],
   'a genuine breach of the stamped gate is still caught');
+
+// The history must be OPEN-ENDED. A terminating table filed every unstamped trade taken after the
+// cutover as `spread-gate-unknown` -- which is what happened to a compliant 0.1c BNB trade, because the
+// running process had cached calibration.js from before the stamp shipped.
+eq(kinds({ ...CLEAN, calSpreadCents: 0.1, calMaxSpreadCents: null,
+           entryAt: '2026-09-05T03:21:03.956Z' }), [],
+  'an unstamped post-cutover trade inside the 0.6c gate is compliant, not unauditable');
+eq(kinds({ ...CLEAN, calSpreadCents: 1.0, calMaxSpreadCents: null,
+           entryAt: '2026-09-05T03:21:03.956Z' }), ['spread'],
+  'and an unstamped post-cutover trade OVER the 0.6c gate is still caught');
 eq(kinds({ ...CLEAN, calBucket: '40-60c' }), ['bucket'], 'an inactive bucket is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 12.5 }), ['timing'], 'an early entry is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 3 }), ['timing'], 'a late entry is caught');
