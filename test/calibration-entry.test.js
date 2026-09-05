@@ -51,8 +51,9 @@ const FROZEN_NOW = Date.parse('2026-09-04T17:00:00Z');
 const realNow = Date.now;
 Date.now = () => FROZEN_NOW;
 
-// One round, nine minutes out, YES quoted 0.84/0.85 — inside 75-90c with a 1c spread, so it qualifies.
-let QUOTE = { yes_ask_dollars: '0.85', no_ask_dollars: '0.16', yes_bid_dollars: '0.84' };
+// One round, nine minutes out, YES quoted 0.9250/0.9300 — inside 90-95c with a 0.5c spread. Under the
+// 0.6c gate a 1c book no longer qualifies at all, and only 90-95c books are ever quoted this tight.
+let QUOTE = { yes_ask_dollars: '0.9300', no_ask_dollars: '0.0750', yes_bid_dollars: '0.9250' };
 let MINUTES_OUT = 9;
 const origLoad = Module._load;
 const stubAxios = {
@@ -107,17 +108,19 @@ users.init({ log: () => {} });
 
   // 1. the gate produces a decision from the book alone
   const raw = await trader.decideFor(coin);
-  ok(!raw.skip, `decideFor takes an 85c in-band book (got ${raw.skip || ''} ${raw.why || ''})`);
+  ok(!raw.skip, `decideFor takes a tight 93c in-band book (got ${raw.skip || ''} ${raw.why || ''})`);
   eq(raw.strategy, 'CALIBRATION');
   eq(raw.side, 'YES');
   eq(raw.direction, 'UP');
-  eq(raw.calBucket, '75-90c');
+  eq(raw.calBucket, '90-95c');
   eq(raw.calMarginal, false);
-  eq(raw.pricePct, 85, 'the YES entry pays the YES ask');
-  eq(raw.calSpreadCents, 1);
-  ok(raw.calLimit === 0.86, 'the carried limit is the ask plus the 1c grace');
+  eq(raw.pricePct, 93, 'the YES entry pays the YES ask');
+  eq(raw.calSpreadCents, 0.5);
+  ok(raw.calLimit === 0.94, 'the carried limit is the ask plus the 1c grace');
   ok(raw.calTStat > 4, 'the bucket t-statistic travels with the decision');
-  ok(raw.confidence > 84 && raw.confidence < 93, 'confidence is the side mid plus the measured bias');
+  // 92.75 mid + 3.564pp bias = 96.314, reported rounded to one decimal.
+  ok(Math.abs(raw.confidence - 96.3) < 0.01,
+    `confidence is the side mid plus the measured 90-95c bias (got ${raw.confidence})`);
 
   // 2. the signal is not held back on first sight
   const d = trader.gateSignal(coin, raw, Date.now());
@@ -142,7 +145,7 @@ users.init({ log: () => {} });
   ok(placed && placed.pending,
     `the paper entry is placed (got ${placed && placed.why ? placed.why : JSON.stringify(placed)})`);
   eq(placed.pending.kind, 'paper', 'it is placed against the paper book');
-  eq(placed.pending.limitCents, 86,
+  eq(placed.pending.limitCents, 94,
     'the placement carries the grace-capped limit, not the 4c slippage dial');
   eq(placed.pending.shares, 5);
   eq(placed.pending.block, null, 'nothing blocked the paper placement');
@@ -182,6 +185,12 @@ users.init({ log: () => {} });
   const wide = await trader.decideFor(coin);
   eq(wide.skip, 'cal-wide-spread', `a 5c spread is refused (got ${wide.skip})`);
 
+  // 7b. under the 0.6c gate a ONE-CENT book is refused too, which is the whole point of the change:
+  // it is what makes 75-90c unreachable and lifts the realized win rate to ~96%.
+  QUOTE = { yes_ask_dollars: '0.93', no_ask_dollars: '0.08', yes_bid_dollars: '0.92' };
+  const oneCent = await trader.decideFor(coin);
+  eq(oneCent.skip, 'cal-wide-spread', `a 1c book is now refused (got ${oneCent.skip})`);
+
   // 8. the RECORDED position carries the gate's own inputs
   //
   // This is not bookkeeping. The case for this gate is a measured per-bucket bias over that bucket's
@@ -191,12 +200,12 @@ users.init({ log: () => {} });
   // then being dropped by record(), which is how four paper trades ended up with an unverifiable
   // spread gate. The gap was invisible precisely because nothing failed when the fields went missing,
   // so it is asserted here against a position built by the real settleEntry path.
-  QUOTE = { yes_ask_dollars: '0.85', no_ask_dollars: '0.16', yes_bid_dollars: '0.84' };
+  QUOTE = { yes_ask_dollars: '0.9300', no_ask_dollars: '0.0750', yes_bid_dollars: '0.9250' };
   const d2 = await trader.decideFor(coin);
   ok(!d2.skip, `the qualifying round still decides (got ${d2.skip || 'ok'})`);
   const before = book.openPositions(paper.rec.book).length;
   const limit2 = trader.entryLimitCents(d2, Number(paper.get('slippageCents')) || 0);
-  eq(limit2, 86, 'the grace-capped limit is still 86c, not the 4c slippage dial');
+  eq(limit2, 94, 'the grace-capped limit is still ask+1c, not the 4c slippage dial');
   const filled = await trader.settleEntry({
     t: paper, d: d2, kind: 'paper', shares: 5,
     limitCents: limit2, res: null, block: null
@@ -208,7 +217,7 @@ users.init({ log: () => {} });
   const pos = opened[opened.length - 1];
 
   eq(pos.strategy, 'CALIBRATION', 'the position is tagged with the gate that produced it');
-  eq(pos.calBucket, '75-90c', `the bucket is persisted (got ${pos.calBucket})`);
+  eq(pos.calBucket, '90-95c', `the bucket is persisted (got ${pos.calBucket})`);
   eq(pos.calMarginal, false, 'the bucket is recorded as non-marginal');
   ok(Number.isFinite(pos.calTStat) && pos.calTStat > 2,
     `the bucket's t-stat is persisted (got ${pos.calTStat})`);
@@ -217,9 +226,9 @@ users.init({ log: () => {} });
   ok(Number.isFinite(pos.calGraceCents), `the grace allowance is persisted (got ${pos.calGraceCents})`);
   ok(Number.isFinite(pos.calLimit), `the entry limit is persisted (got ${pos.calLimit})`);
 
-  // The spread is the audit that could not be run on the live trades. 0.84/0.85 is a 1c book, and it
-  // has to survive as 1c on the record rather than as a value inferred from the absence of slippage.
-  ok(Number.isFinite(pos.calSpreadCents) && Math.abs(pos.calSpreadCents - 1) < 1e-6,
+  // The spread is the audit that could not be run on the live trades. 0.9250/0.9300 is a 0.5c book,
+  // and it has to survive as 0.5c on the record rather than as a value inferred from no slippage.
+  ok(Number.isFinite(pos.calSpreadCents) && Math.abs(pos.calSpreadCents - 0.5) < 1e-6,
     `the spread paid is persisted exactly (got ${pos.calSpreadCents})`);
   ok(pos.calSpreadCents <= calibration.CAL_MAX_SPREAD_CENTS,
     'the persisted spread is inside the validated gate, verifiably and not by inference');
@@ -227,7 +236,7 @@ users.init({ log: () => {} });
   // calMid must be the BOOK MID, distinct from the fill. midPct is assigned from pricePct for every
   // strategy, so it is the price paid; if calMid were wired to the same source the cost being measured
   // would collapse to zero and every future audit would read as free execution.
-  ok(Math.abs(pos.calMid - 0.845) < 1e-6, `calMid is the book mid, not the fill (got ${pos.calMid})`);
+  ok(Math.abs(pos.calMid - 0.9275) < 1e-6, `calMid is the book mid, not the fill (got ${pos.calMid})`);
   ok(pos.calMid < pos.price,
     `the mid sits below the ask actually paid (mid ${pos.calMid} vs paid ${pos.price})`);
 

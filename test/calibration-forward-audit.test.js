@@ -21,9 +21,14 @@ const eq = (a, b, m) => { checks++; assert.deepStrictEqual(a, b, m); };
 const kinds = p => audit.violations(p).map(v => v.kind).sort();
 
 // A trade that satisfies every gate. 13:00 ET close is outside the excluded [7, 8] hours.
+//
+// Under the 0.6c spread cap this must be a 90-95c trade: a 1c book is now refused outright, and only
+// 90-95c books are ever quoted tight enough to qualify. The earlier version of this fixture carried
+// calSpreadCents: 1.0 and started failing the moment the cap tightened -- which is the audit reading
+// its thresholds from the gate rather than hardcoding them, exactly as intended.
 const CLEAN = {
-  seq: 1, sym: 'ETH', direction: 'UP', price: 0.79, priceCents: 79, cost: 19.75, pnl: 5.25,
-  strategy: 'CALIBRATION', calBucket: '75-90c', calSpreadCents: 1.0, calGraceCents: 1,
+  seq: 1, sym: 'ETH', direction: 'UP', price: 0.93, priceCents: 93, cost: 23.25, pnl: 1.55,
+  strategy: 'CALIBRATION', calBucket: '90-95c', calSpreadCents: 0.5, calGraceCents: 1,
   minutesLeft: 9.0, slippageCents: 0,
   closeTime: '2026-09-04T17:00:00Z', closeMs: Date.parse('2026-09-04T17:00:00Z')
 };
@@ -33,6 +38,8 @@ eq(kinds(CLEAN), [], 'a fully compliant trade reports nothing');
 
 // 2. every individual gate fires
 eq(kinds({ ...CLEAN, calSpreadCents: 2.5 }), ['spread'], 'a 2.5c spread is caught');
+eq(kinds({ ...CLEAN, calSpreadCents: 1.0 }), ['spread'],
+  'a 1c spread is caught under the 0.6c cap -- the change that makes 75-90c unreachable');
 eq(kinds({ ...CLEAN, calBucket: '40-60c' }), ['bucket'], 'an inactive bucket is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 12.5 }), ['timing'], 'an early entry is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 3 }), ['timing'], 'a late entry is caught');
