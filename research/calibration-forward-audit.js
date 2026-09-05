@@ -92,11 +92,19 @@ function settledTrades(book) {
  * force from the calibration gate shipping until the 0.6c merge -- so the honest fix is to record it and
  * audit each trade against the rule of its own era.
  *
- * `until` is the UTC instant the entry stopped applying. Append a new row on every gate change; the
- * stamp makes this table unnecessary for anything traded from now on.
+ * `until` is the UTC instant the entry stopped applying. The LAST row must be open-ended (`until:
+ * Infinity`) so the table always resolves.
+ *
+ * That open row is not decoration. The first version of this table ended at the 0.6c cutover, on the
+ * assumption every later trade would carry a stamp -- but a long-running bot process caches
+ * calibration.js at require time, so the process that was already running kept taking unstamped trades
+ * for an hour after the stamp shipped. Each one fell off the end of the table and was filed
+ * `spread-gate-unknown`, quietly moving a compliant 0.1c-spread trade into the unauditable pile. A
+ * terminating history silently mislabels exactly the trades it was built to protect.
  */
 const SPREAD_GATE_HISTORY = Object.freeze([
-  { until: Date.parse('2026-09-05T02:15:29Z'), cents: 1.05, note: 'pre-0.6c-merge era' }
+  { until: Date.parse('2026-09-05T02:15:29Z'), cents: 1.05, note: 'pre-0.6c-merge era' },
+  { until: Infinity, cents: 0.6, note: 'current 0.6c era' }
 ]);
 
 /** The gate a trade was actually subject to: its own stamp, else the era it was taken in. */
