@@ -104,7 +104,8 @@ function settledTrades(book) {
  */
 const SPREAD_GATE_HISTORY = Object.freeze([
   { until: Date.parse('2026-09-05T02:15:29Z'), cents: 1.05, note: 'pre-0.6c-merge era' },
-  { until: Infinity, cents: 0.6, note: 'current 0.6c era' }
+  { until: Date.parse('2026-09-05T14:00:00Z'), cents: 0.6, note: '0.6c experiment, reverted for inability to transact' },
+  { until: Infinity, cents: 1.05, note: 'current 1.05c era (sweep optimum, restored)' }
 ]);
 
 /** The gate a trade was actually subject to: its own stamp, else the era it was taken in. */

@@ -185,11 +185,15 @@ users.init({ log: () => {} });
   const wide = await trader.decideFor(coin);
   eq(wide.skip, 'cal-wide-spread', `a 5c spread is refused (got ${wide.skip})`);
 
-  // 7b. under the 0.6c gate a ONE-CENT book is refused too, which is the whole point of the change:
-  // it is what makes 75-90c unreachable and lifts the realized win rate to ~96%.
+  // 7b. the boundary of the restored 1.05c gate. A 1c book is INSIDE it and must be accepted -- that is
+  // the volume the 0.6c experiment gave up, and getting it back is the whole point of the revert. A
+  // 1.5c book is outside and must still be refused, so the gate is a real bound and not a rubber stamp.
   QUOTE = { yes_ask_dollars: '0.93', no_ask_dollars: '0.08', yes_bid_dollars: '0.92' };
   const oneCent = await trader.decideFor(coin);
-  eq(oneCent.skip, 'cal-wide-spread', `a 1c book is now refused (got ${oneCent.skip})`);
+  ok(!oneCent.skip, `a 1c book is inside the 1.05c gate (got ${oneCent.skip || 'accepted'})`);
+  QUOTE = { yes_ask_dollars: '0.93', no_ask_dollars: '0.08', yes_bid_dollars: '0.915' };
+  const wideish = await trader.decideFor(coin);
+  eq(wideish.skip, 'cal-wide-spread', `a 1.5c book is still refused (got ${wideish.skip})`);
 
   // 8. the RECORDED position carries the gate's own inputs
   //
