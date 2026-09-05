@@ -50,9 +50,32 @@ const CAL_BUCKETS = Object.freeze([
     biasPp: 4.092, costPp: 1.83, surplusPp: 2.262, t: 4.30, marginal: false }),
   Object.freeze({ label: '90-95c', lo: 0.90, hi: 0.95, side: 'YES',
     biasPp: 3.564, costPp: 0.88, surplusPp: 2.684, t: 4.93, marginal: false }),
+  /**
+   * DISABLED on forward evidence. Kept here as the record, not as a live rule.
+   *
+   * This bucket never cleared the pre-declared bar: its surplus over the cost of buying NO is +0.97pp at
+   * t=1.77, against the 2-sigma requirement the two UP buckets pass at t=4.30 and t=4.93. It was admitted
+   * anyway, by request, to be measured live.
+   *
+   * It was measured, and it failed. Across 49 unique settled paper trades it took 35 of them — 71% of all
+   * capacity — at a 71.4% win rate against the ~80% its own mean entry price of 0.801 implies, for -12.04%
+   * ROI. The UP buckets over the same period were -4.49% and +6.01% on much smaller samples. Two things
+   * make this a fail-closed decision rather than a reaction to a loss streak: the historical bar that
+   * rejected it was declared before any live data existed, and forward evidence has now independently
+   * agreed with it. Disabling it does not adopt a new challenger, it reverts to the configuration the
+   * pre-declared rule always supported.
+   *
+   * A sustained one-way crypto regime is what let it dominate: when prices fall for hours, YES sits at
+   * 10-25c across every coin and this bucket fires on all of them at once, crowding out the buckets that
+   * did pass. Re-enable ONLY on a day-clustered forward interval whose lower bound is above zero,
+   * measured on independent windows rather than correlated trades.
+   */
   Object.freeze({ label: '10-25c-NO', lo: 0.10, hi: 0.25, side: 'NO',
-    biasPp: -2.814, costPp: 1.84, surplusPp: 0.974, t: 1.77, marginal: true })
+    biasPp: -2.814, costPp: 1.84, surplusPp: 0.974, t: 1.77, marginal: true, enabled: false })
 ]);
+
+/** Buckets actually traded. A disabled bucket stays visible for provenance but never fires. */
+const CAL_ACTIVE_BUCKETS = Object.freeze(CAL_BUCKETS.filter(b => b.enabled !== false));
 
 /** Decision clock, in minutes left. The corpus was measured at exactly 9 minutes. */
 const CAL_DECIDE_MIN = 8.25;
@@ -60,7 +83,42 @@ const CAL_DECIDE_MAX = 9.75;
 const CAL_DECIDE_TARGET = 9;
 
 /** Maximum quoted spread in cents for an entry to be taken. */
-const CAL_MAX_SPREAD_CENTS = 1.05;
+/**
+ * Maximum half-spread cost, in cents, that an entry may pay.
+ *
+ * ── 0.6c is a DELIBERATE trade of expected profit for fewer losing trades ──
+ *
+ * Swept against all 25,159 settled markets across 6 decision minutes x 5 spread caps x 4 bucket sets
+ * x the session gate (240 configs), ranked on the day-clustered 95% CI lower bound of per-trade ROI:
+ *
+ *     cap      n     win%   loss%   ROI      CI floor
+ *     1.05c   3384   90.1    9.9   +2.81%   +1.29%   <- the sweep optimum
+ *     0.6c     692   96.2    3.8   +2.34%   +0.30%   <- this setting
+ *
+ * So this is NOT the best config. It wins on the one axis the user asked for -- losing trades drop
+ * from 9.9% to 3.8%, a 2.6x reduction -- and it pays for that on every other axis: ROI falls 0.47pp
+ * and, more importantly, the confidence floor falls from +1.29% to +0.30%, roughly four times less
+ * certain that the profit is real at all. Volume drops to 20% of the 1.05c gate: 692 trades over 68
+ * settlement days, about 11 per day across all seven coins before the one-per-window guard, so the
+ * forward sample now accumulates about five times slower.
+ *
+ * Chosen by the user with those numbers in front of them. Recorded here rather than in a commit
+ * message because the next person to read this constant will otherwise assume it was optimised.
+ *
+ * ── it is also, structurally, a bucket filter ──
+ *
+ * Measured, not inferred: of the 5,551 in-band markets at minute 9, the 759 with a spread at or under
+ * 0.6c are ALL in 90-95c and NONE in 75-90c -- a 75-90c book is never quoted that tight (their
+ * spreads cluster at 0.1c). So 75-90c stays enabled and validated in CAL_BUCKETS, and is in practice
+ * unreachable while this cap holds. That is why the win rate jumps: 90-95c realizes ~96%.
+ *
+ * The consequence worth knowing: 90-95c risks ~93c to win ~7c, so its wins are small and its losses
+ * are nearly the whole stake. Fewer losses do NOT mean a smaller drawdown per loss.
+ *
+ * The research shadow keeps its own frozen 1.05c config, which makes it a live control: the two books
+ * now measure the two caps side by side on the same markets.
+ */
+const CAL_MAX_SPREAD_CENTS = 0.6;
 
 /**
  * Grace allowance in cents above the quoted ask. A real taker order is a limit order: it fills only if
@@ -154,7 +212,7 @@ function finiteOrNull(value) {
 function bucketFor(yesMid) {
   const mid = finiteOrNull(yesMid);
   if (mid == null) return null;
-  return CAL_BUCKETS.find(b => mid >= b.lo && mid < b.hi) || null;
+  return CAL_ACTIVE_BUCKETS.find(b => mid >= b.lo && mid < b.hi) || null;
 }
 
 /** Limit price for a taker entry: the quoted ask plus the grace allowance, capped at 99c. */
@@ -269,6 +327,7 @@ function evaluate({ yesBid, yesAsk, minutesLeft, minLeft, maxLeft, closeTime }) 
 module.exports = {
   evaluate, bucketFor, entryLimit, breakEven, feePt, finiteOrNull, etHour,
   CAL_BUCKETS, CAL_DECIDE_MIN, CAL_DECIDE_MAX, CAL_DECIDE_TARGET,
+  CAL_BUCKETS_ALL: CAL_BUCKETS, CAL_ACTIVE_BUCKETS,
   CAL_MAX_SPREAD_CENTS, CAL_GRACE_CENTS, CAL_SKIP_ET_HOURS, CAL_FITTED,
   CAL_FORWARD_READY, CAL_LIVE_READY
 };

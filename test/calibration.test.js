@@ -19,17 +19,22 @@ const at9 = extra => ({ minutesLeft: 9, ...extra });
   eq(cal.CAL_LIVE_READY, false, 'the calibration gate is NOT cleared for real money');
   eq(cal.CAL_FORWARD_READY, true, 'paper entries are permitted');
   eq(cal.CAL_GRACE_CENTS, 1, 'the live shadow measured 1c as the best grace allowance');
-  eq(cal.CAL_MAX_SPREAD_CENTS, 1.05);
+  eq(cal.CAL_MAX_SPREAD_CENTS, 0.6);
   eq(cal.CAL_FITTED.markets, 25159);
   ok(Object.isFrozen(cal.CAL_BUCKETS), 'the bucket table cannot be mutated at runtime');
 }
 
 // Only the three supported bands are active, and >=95c / mid prices are refused.
 {
-  eq(cal.CAL_BUCKETS.map(b => b.label), ['75-90c', '90-95c', '10-25c-NO']);
+  eq(cal.CAL_BUCKETS_ALL.map(b => b.label), ['75-90c', '90-95c', '10-25c-NO'],
+    'the disabled bucket stays visible for provenance');
+  eq(cal.CAL_ACTIVE_BUCKETS.map(b => b.label), ['75-90c', '90-95c'],
+    'only the two buckets that cleared the 2-sigma bar are traded');
+  ok(cal.CAL_ACTIVE_BUCKETS.every(b => b.t > 2), 'every active bucket clears two standard errors');
   eq(cal.bucketFor(0.82).side, 'YES');
   eq(cal.bucketFor(0.92).side, 'YES');
-  eq(cal.bucketFor(0.15).side, 'NO', 'a 15c YES mid means NO is the underpriced favourite');
+  eq(cal.bucketFor(0.15), null,
+    'the DOWN mirror is DISABLED after failing forward: 35 of 49 trades, 71.4% win, -12.04% ROI');
   eq(cal.bucketFor(0.96), null, '>=95c failed its own t-test');
   eq(cal.bucketFor(0.50), null, 'mid prices are the costliest and are excluded');
   eq(cal.bucketFor(0.08), null, 'the 5-10c mirror is negative by construction');
@@ -38,17 +43,17 @@ const at9 = extra => ({ minutesLeft: 9, ...extra });
 
 // The clock band gates entry, defaulting to the measured 9-minute decision point.
 {
-  eq(cal.evaluate({ yesBid: 0.84, yesAsk: 0.85, minutesLeft: 12 }).skip, 'cal-too-early');
-  eq(cal.evaluate({ yesBid: 0.84, yesAsk: 0.85, minutesLeft: 3 }).skip, 'cal-too-late');
-  eq(cal.evaluate({ yesBid: 0.84, yesAsk: 0.85, minutesLeft: null }).skip, 'cal-no-clock');
-  ok(!cal.evaluate(at9({ yesBid: 0.84, yesAsk: 0.85 })).skip, '9 minutes left is inside the band');
+  eq(cal.evaluate({ yesBid: 0.9250, yesAsk: 0.9300, minutesLeft: 12 }).skip, 'cal-too-early');
+  eq(cal.evaluate({ yesBid: 0.9250, yesAsk: 0.9300, minutesLeft: 3 }).skip, 'cal-too-late');
+  eq(cal.evaluate({ yesBid: 0.9250, yesAsk: 0.9300, minutesLeft: null }).skip, 'cal-no-clock');
+  ok(!cal.evaluate(at9({ yesBid: 0.9250, yesAsk: 0.9300 })).skip, '9 minutes left is inside the band');
   eq(cal.CAL_DECIDE_TARGET, 9);
   ok(cal.CAL_DECIDE_MIN < 9 && cal.CAL_DECIDE_MAX > 9);
 }
 
 // Entry must fire AT the decision point, never on the early edge of a tolerance band.
 {
-  const q = { yesBid: 0.84, yesAsk: 0.85 };
+  const q = { yesBid: 0.9250, yesAsk: 0.9300 };
   // Anything before the target is refused, so a poller cannot enter 30-45s early and trade a different
   // population than the corpus was sampled from.
   eq(cal.evaluate({ ...q, minutesLeft: 9.7 }).skip, 'cal-too-early',
@@ -74,7 +79,7 @@ const at9 = extra => ({ minutesLeft: 9, ...extra });
   eq(cal.etHour(null), null);
   eq(cal.etHour('not a date'), null);
 
-  const q = { yesBid: 0.84, yesAsk: 0.85, minutesLeft: 9 };
+  const q = { yesBid: 0.9250, yesAsk: 0.9300, minutesLeft: 9 };
   eq(cal.evaluate({ ...q, closeTime: '2026-09-04T11:15:00Z' }).skip, 'cal-skip-hour');
   eq(cal.evaluate({ ...q, closeTime: '2026-09-04T12:15:00Z' }).skip, 'cal-skip-hour');
   eq(cal.evaluate({ ...q, closeTime: '2026-09-04T12:15:00Z' }).etHour, 8,
@@ -97,38 +102,34 @@ const at9 = extra => ({ minutesLeft: 9, ...extra });
 
 // An absent quote must never become a free contract.
 {
-  eq(cal.evaluate(at9({ yesBid: null, yesAsk: 0.85 })).skip, 'cal-no-quote',
+  eq(cal.evaluate(at9({ yesBid: null, yesAsk: 0.9300 })).skip, 'cal-no-quote',
     'Number(null) is 0 and finite, so null must be rejected explicitly');
-  eq(cal.evaluate(at9({ yesBid: '', yesAsk: 0.85 })).skip, 'cal-no-quote');
-  eq(cal.evaluate(at9({ yesBid: 0.84, yesAsk: 1 })).skip, 'cal-no-quote', 'a 100c ask is not a quote');
-  eq(cal.evaluate(at9({ yesBid: 0, yesAsk: 0.85 })).skip, 'cal-no-quote');
-  eq(cal.evaluate(at9({ yesBid: 0.86, yesAsk: 0.85 })).skip, 'cal-crossed');
+  eq(cal.evaluate(at9({ yesBid: '', yesAsk: 0.9300 })).skip, 'cal-no-quote');
+  eq(cal.evaluate(at9({ yesBid: 0.9250, yesAsk: 1 })).skip, 'cal-no-quote', 'a 100c ask is not a quote');
+  eq(cal.evaluate(at9({ yesBid: 0, yesAsk: 0.9300 })).skip, 'cal-no-quote');
+  eq(cal.evaluate(at9({ yesBid: 0.94, yesAsk: 0.9300 })).skip, 'cal-crossed');
 }
 
 // A UP favourite inside the band and the spread gate produces a YES entry at ask plus grace.
 {
-  const d = cal.evaluate(at9({ yesBid: 0.84, yesAsk: 0.85 }));
+  const d = cal.evaluate(at9({ yesBid: 0.9250, yesAsk: 0.9300 }));
   eq(d.side, 'YES');
-  eq(d.bucket, '75-90c');
+  eq(d.bucket, '90-95c');
   eq(d.marginal, false);
-  near(d.price, 0.85, 1e-9, 'the YES entry pays the YES ask');
-  near(d.limit, 0.86, 1e-9, 'the limit is the ask plus the 1c grace');
-  eq(d.spreadCents, 1);
-  near(d.mid, 0.845);
-  ok(d.winPct > 84 && d.winPct < 93, 'the win estimate is the side mid plus the bucket bias');
+  near(d.price, 0.93, 1e-9, 'the YES entry pays the YES ask');
+  near(d.limit, 0.94, 1e-9, 'the limit is the ask plus the 1c grace');
+  eq(d.spreadCents, 0.5);
+  near(d.mid, 0.9275);
+  // 92.75 mid + 3.564pp bias = 96.314, reported rounded to one decimal.
+  near(d.winPct, 96.3, 0.01, 'the win estimate is the side mid plus the 90-95c bias');
   ok(d.edgePt > 2 && d.tStat > 4, 'the surplus and t-statistic are carried for the panel');
 }
 
-// A DOWN favourite inverts the ladder and is flagged marginal.
+// A DOWN price now produces no trade at all, since its bucket is disabled.
 {
   const d = cal.evaluate(at9({ yesBid: 0.14, yesAsk: 0.15 }));
-  eq(d.side, 'NO');
-  eq(d.bucket, '10-25c-NO');
-  eq(d.marginal, true, 'the DOWN mirror is weaker and must be labelled');
-  near(d.price, 0.86, 1e-9, 'the NO ask is 1 minus the YES bid');
-  near(d.limit, 0.87, 1e-9);
-  ok(d.tStat < 2, 'its surplus does not clear two standard errors');
-  ok(d.winPct > 80, 'a NO favourite still estimates a high win rate');
+  eq(d.skip, 'cal-off-band', 'a 15c mid is no longer tradable');
+  ok(!d.side, 'no side is chosen for a disabled bucket');
 }
 
 // The spread gate refuses a wide book even when the price is in band.
