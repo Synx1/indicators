@@ -86,39 +86,32 @@ const CAL_DECIDE_TARGET = 9;
 /**
  * Maximum half-spread cost, in cents, that an entry may pay.
  *
- * ── 0.6c is a DELIBERATE trade of expected profit for fewer losing trades ──
+ * ── 1.05c is the sweep optimum, and it is now BACKED FORWARD as well as historically ──
  *
- * Swept against all 25,159 settled markets across 6 decision minutes x 5 spread caps x 4 bucket sets
- * x the session gate (240 configs), ranked on the day-clustered 95% CI lower bound of per-trade ROI:
+ * Swept against all 25,159 settled markets (240 configs: 6 decision minutes x 5 spread caps x 4 bucket
+ * sets x the session gate), ranked on the day-clustered 95% CI lower bound of per-trade ROI:
  *
  *     cap      n     win%   loss%   ROI      CI floor
- *     1.05c   3384   90.1    9.9   +2.81%   +1.29%   <- the sweep optimum
- *     0.6c     692   96.2    3.8   +2.34%   +0.30%   <- this setting
+ *     1.05c   3384   90.1    9.9   +2.81%   +1.29%   <- this setting, ranked 1st of 240
+ *     0.6c     692   96.2    3.8   +2.34%   +0.30%
  *
- * So this is NOT the best config. It wins on the one axis the user asked for -- losing trades drop
- * from 9.9% to 3.8%, a 2.6x reduction -- and it pays for that on every other axis: ROI falls 0.47pp
- * and, more importantly, the confidence floor falls from +1.29% to +0.30%, roughly four times less
- * certain that the profit is real at all. Volume drops to 20% of the 1.05c gate: 692 trades over 68
- * settlement days, about 11 per day across all seven coins before the one-per-window guard, so the
- * forward sample now accumulates about five times slower.
+ * And confirmed forward by the research shadow running this exact cap: 151 settled trades, 87.5% win,
+ * +4.2% ROI -- landing on the +2.81% the corpus predicted. That is the only configuration in this
+ * project with historical AND forward evidence pointing the same way.
  *
- * Chosen by the user with those numbers in front of them. Recorded here rather than in a commit
- * message because the next person to read this constant will otherwise assume it was optimised.
+ * ── why the 0.6c experiment was reverted ──
  *
- * ── it is also, structurally, a bucket filter ──
+ * 0.6c was set deliberately to cut losing trades from 9.9% to 3.8%, accepting a weaker floor. The
+ * forward result was not a loss, it was SILENCE: 2 trades in 7 hours of live operation, because only
+ * 759 of 25,159 markets are ever quoted that tight and all 7 coins share one 15-minute grid. A gate
+ * that cannot transact cannot compound, and a 96.2% win rate on two trades is not a result. Reverted on
+ * that basis -- inability to accumulate evidence -- not because it lost money.
  *
- * Measured, not inferred: of the 5,551 in-band markets at minute 9, the 759 with a spread at or under
- * 0.6c are ALL in 90-95c and NONE in 75-90c -- a 75-90c book is never quoted that tight (their
- * spreads cluster at 0.1c). So 75-90c stays enabled and validated in CAL_BUCKETS, and is in practice
- * unreachable while this cap holds. That is why the win rate jumps: 90-95c realizes ~96%.
- *
- * The consequence worth knowing: 90-95c risks ~93c to win ~7c, so its wins are small and its losses
- * are nearly the whole stake. Fewer losses do NOT mean a smaller drawdown per loss.
- *
- * The research shadow keeps its own frozen 1.05c config, which makes it a live control: the two books
- * now measure the two caps side by side on the same markets.
+ * The cost of coming back is honest: ~1 trade in 10 loses again, and a loss at these prices is roughly
+ * 5x the size of a win. The compensation is a floor 4x higher and 5x the volume for the edge to work
+ * through.
  */
-const CAL_MAX_SPREAD_CENTS = 0.6;
+const CAL_MAX_SPREAD_CENTS = 1.05;
 
 /**
  * Grace allowance in cents above the quoted ask. A real taker order is a limit order: it fills only if

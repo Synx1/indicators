@@ -19,7 +19,7 @@ const at9 = extra => ({ minutesLeft: 9, ...extra });
   eq(cal.CAL_LIVE_READY, false, 'the calibration gate is NOT cleared for real money');
   eq(cal.CAL_FORWARD_READY, true, 'paper entries are permitted');
   eq(cal.CAL_GRACE_CENTS, 1, 'the live shadow measured 1c as the best grace allowance');
-  eq(cal.CAL_MAX_SPREAD_CENTS, 0.6);
+  eq(cal.CAL_MAX_SPREAD_CENTS, 1.05);
   eq(cal.CAL_FITTED.markets, 25159);
   ok(Object.isFrozen(cal.CAL_BUCKETS), 'the bucket table cannot be mutated at runtime');
 }
