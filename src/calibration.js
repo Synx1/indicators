@@ -310,6 +310,11 @@ function evaluate({ yesBid, yesAsk, minutesLeft, minLeft, maxLeft, closeTime }) 
     price,
     limit: entryLimit(price),
     graceCents: CAL_GRACE_CENTS,
+    // The spread gate IN FORCE at decision time, carried so the audit can judge this trade against the
+    // rule it actually traded under. Without it, tightening the gate retroactively reclassifies every
+    // older compliant trade as a violation -- which is what happened when 1.05c became 0.6c and 21
+    // legitimate trades started reporting `spread: paid 1.00c > 0.6c gate` forever.
+    maxSpreadCents: CAL_MAX_SPREAD_CENTS,
     bucket: bucket.label,
     marginal: bucket.marginal,
     winPct,

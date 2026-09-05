@@ -38,8 +38,22 @@ eq(kinds(CLEAN), [], 'a fully compliant trade reports nothing');
 
 // 2. every individual gate fires
 eq(kinds({ ...CLEAN, calSpreadCents: 2.5 }), ['spread'], 'a 2.5c spread is caught');
-eq(kinds({ ...CLEAN, calSpreadCents: 1.0 }), ['spread'],
-  'a 1c spread is caught under the 0.6c cap -- the change that makes 75-90c unreachable');
+// A 1c book breaches a 0.6c gate -- but only for a trade that ACTUALLY traded under 0.6c, which is why
+// the stamp is explicit here. Without it this trade dates to the 1.05c era, where 1c was compliant.
+eq(kinds({ ...CLEAN, calSpreadCents: 1.0, calMaxSpreadCents: 0.6 }), ['spread'],
+  'a 1c spread breaches a stamped 0.6c gate -- the change that makes 75-90c unreachable');
+
+// ── the retroactive-gate regression ──
+// Tightening the live gate must NOT reclassify an older compliant trade as a violation. A trade that
+// stamped its own gate is judged by the stamp; a pre-stamp trade is judged by the era it traded in.
+// This actually happened: 1.05c -> 0.6c turned 21 legitimate trades into permanent false violations.
+eq(kinds({ ...CLEAN, calSpreadCents: 1.0, calMaxSpreadCents: 1.05 }), [],
+  'a 1c trade that stamped a 1.05c gate is compliant, whatever the gate is today');
+eq(kinds({ ...CLEAN, calSpreadCents: 1.0, calMaxSpreadCents: null,
+           entryAt: '2026-09-04T18:00:00Z' }), [],
+  'a pre-stamp 1c trade from the 1.05c era is compliant via the known gate history');
+eq(kinds({ ...CLEAN, calSpreadCents: 2.0, calMaxSpreadCents: 1.05 }), ['spread'],
+  'a genuine breach of the stamped gate is still caught');
 eq(kinds({ ...CLEAN, calBucket: '40-60c' }), ['bucket'], 'an inactive bucket is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 12.5 }), ['timing'], 'an early entry is caught');
 eq(kinds({ ...CLEAN, minutesLeft: 3 }), ['timing'], 'a late entry is caught');
@@ -131,9 +145,11 @@ const lci = audit.roiCI(losing);
 ok(lci.high < 0, `an all-losing sample yields a negative upper bound (got ${lci.high})`);
 
 // 11. the checker reads its thresholds from the gate, so tightening the gate tightens the audit
-ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS }).length === 0,
+ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS,
+    calMaxSpreadCents: calibration.CAL_MAX_SPREAD_CENTS }).length === 0,
   'a spread exactly at the gate is allowed');
-ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS + 0.01 })
+ok(audit.violations({ ...CLEAN, calSpreadCents: calibration.CAL_MAX_SPREAD_CENTS + 0.01,
+    calMaxSpreadCents: calibration.CAL_MAX_SPREAD_CENTS })
   .some(v => v.kind === 'spread'), 'a spread one hundredth past the gate is refused');
 
 console.log(`PASS calibration forward audit — ${checks} checks`);

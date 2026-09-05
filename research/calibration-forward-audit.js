@@ -80,6 +80,37 @@ function settledTrades(book) {
  * Returns the violations found. An empty array means the trade is provably compliant rather than
  * assumed compliant, which is the whole point.
  */
+/**
+ * The spread gate's KNOWN history, newest first.
+ *
+ * Trades taken from the 0.6c merge onward stamp their own gate (`calMaxSpreadCents`) and are judged
+ * against that. Older trades carry no stamp, and judging them by today's constant is what turned 21
+ * compliant trades into permanent false violations the moment 1.05c became 0.6c.
+ *
+ * Throwing those trades away as "unauditable" would be the other wrong answer: it discards the entire
+ * forward record to avoid one misclassification. The gate history is a FACT, not a guess -- 1.05c was in
+ * force from the calibration gate shipping until the 0.6c merge -- so the honest fix is to record it and
+ * audit each trade against the rule of its own era.
+ *
+ * `until` is the UTC instant the entry stopped applying. Append a new row on every gate change; the
+ * stamp makes this table unnecessary for anything traded from now on.
+ */
+const SPREAD_GATE_HISTORY = Object.freeze([
+  { until: Date.parse('2026-09-05T02:15:29Z'), cents: 1.05, note: 'pre-0.6c-merge era' }
+]);
+
+/** The gate a trade was actually subject to: its own stamp, else the era it was taken in. */
+function gateFor(p) {
+  if (p.calMaxSpreadCents != null) return { cents: p.calMaxSpreadCents, source: 'stamped at entry' };
+  const at = Date.parse(p.entryAt || p.at || '') || p.closeMs || Date.parse(p.closeTime || '') || null;
+  if (at == null) return null;
+  for (const era of SPREAD_GATE_HISTORY) if (at < era.until) return { cents: era.cents, source: era.note };
+  return null;
+}
+
+/** Findings that mean "the record cannot answer this", as opposed to "the gate was broken". */
+const UNAUDITABLE_KINDS = new Set(['unauditable', 'spread-gate-unknown']);
+
 function violations(p) {
   const out = [];
   const active = calibration.CAL_BUCKETS.filter(b => b.enabled !== false).map(b => b.label);
@@ -93,8 +124,15 @@ function violations(p) {
   }
   if (p.calSpreadCents == null) {
     out.push({ kind: 'spread-missing', detail: 'bucket recorded but spread was not' });
-  } else if (p.calSpreadCents > calibration.CAL_MAX_SPREAD_CENTS + 1e-9) {
-    out.push({ kind: 'spread', detail: `paid ${p.calSpreadCents.toFixed(2)}c > ${calibration.CAL_MAX_SPREAD_CENTS}c gate` });
+  } else {
+    const gate = gateFor(p);
+    if (gate == null) {
+      out.push({ kind: 'spread-gate-unknown',
+        detail: `paid ${p.calSpreadCents.toFixed(2)}c but neither a stamp nor a datable entry exists` });
+    } else if (p.calSpreadCents > gate.cents + 1e-9) {
+      out.push({ kind: 'spread',
+        detail: `paid ${p.calSpreadCents.toFixed(2)}c > the ${gate.cents}c gate in force (${gate.source})` });
+    }
   }
   if (p.minutesLeft != null && (p.minutesLeft < MIN_LEFT - 1e-9 || p.minutesLeft > MAX_LEFT + 1e-9)) {
     out.push({ kind: 'timing', detail: `fired at ${p.minutesLeft.toFixed(2)}m, outside [${MIN_LEFT}, ${MAX_LEFT}]` });
@@ -182,7 +220,7 @@ function main() {
   for (const p of rows) {
     const v = violations(p);
     if (!v.length) continue;
-    if (v[0].kind === 'unauditable') { unauditable++; continue; }
+    if (v.every(x => UNAUDITABLE_KINDS.has(x.kind))) { unauditable++; continue; }
     bugs++;
     console.log(`  !! ${p.sym} ${p.direction} @${p.priceCents}c ${String(p.closeTime || '').slice(11, 16)}`);
     for (const x of v) console.log(`       ${x.kind}: ${x.detail}`);

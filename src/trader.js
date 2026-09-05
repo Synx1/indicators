@@ -675,7 +675,7 @@ async function calibrationFor(coin, market, strike, s, candles) {
     // Carried so the panel and site can show WHY this round qualified and how strong the band is.
     calBucket: r.bucket, calMarginal: r.marginal, calTStat: r.tStat,
     calBiasPt: r.biasPt, calMid: r.mid, calSpreadCents: r.spreadCents,
-    calLimit: r.limit, calGraceCents: r.graceCents,
+    calLimit: r.limit, calGraceCents: r.graceCents, calMaxSpreadCents: r.maxSpreadCents,
     ...diagnostics
   };
 }
@@ -1253,6 +1253,7 @@ function record(t, d, fill) {
   p.calSpreadCents = d.calSpreadCents;
   p.calLimit = d.calLimit;
   p.calGraceCents = d.calGraceCents;
+  p.calMaxSpreadCents = d.calMaxSpreadCents;
   t.save();
   return p;
 }
